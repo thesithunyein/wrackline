@@ -122,6 +122,8 @@ export default function App() {
     phaseTimer: 0,
     phaseDuration: 4.5,
     isKingTide: false,
+    lastWaveWasKing: false,
+    dryWaves: 0,
     wrackLineX: 780,
     isHolding: false,
     hasGivenFirstInput: false,
@@ -266,8 +268,27 @@ export default function App() {
     const waveFactor = Math.max(0.65, 1 - s.waveIndex * 0.05);
     s.phaseDuration = s.currentDiff.baseLowTide * waveFactor;
 
-    s.isKingTide = s.waveIndex > 1 && Math.random() < 0.28;
-    setIsKingTide(s.isKingTide);
+    // King Tide is rolled, not scheduled. Odds climb as the run goes on so late
+    // waves feel the most dangerous, it never lands twice in a row, and a pity
+    // roll guarantees a long calm stretch still pays off. First eligible on wave 3.
+    // A run only lasts about seven waves before the wrack line runs out, so the
+    // pity window is short: three dry waves and the next one is guaranteed to roll.
+    const KING_TIDE_FIRST_WAVE = 3;
+    const KING_TIDE_PITY_WAVES = 3;
+
+    let isKing = false;
+    if (s.waveIndex >= KING_TIDE_FIRST_WAVE) {
+      if (s.dryWaves >= KING_TIDE_PITY_WAVES) {
+        isKing = true;
+      } else if (!s.lastWaveWasKing) {
+        isKing = Math.random() < Math.min(0.45, 0.18 + s.waveIndex * 0.03);
+      }
+    }
+
+    s.isKingTide = isKing;
+    s.lastWaveWasKing = isKing;
+    s.dryWaves = isKing ? 0 : s.dryWaves + 1;
+    setIsKingTide(isKing);
 
     if (s.isKingTide) {
       playTremolo();
@@ -337,6 +358,8 @@ export default function App() {
     s.wrackLineX = 780;
     s.isHolding = false;
     s.isKingTide = false;
+    s.lastWaveWasKing = false;
+    s.dryWaves = 0;
     s.hasGivenFirstInput = false;
     s.playerX3D = 0;
     s.isMoving = false;
@@ -615,7 +638,10 @@ export default function App() {
 
           const waveRatio = Math.max(0, Math.min(1, (1400 - s.waveX) / 890));
           const wave3DX = 52 - waveRatio * 55;
-          const blobR3D = (s.playerRadius / 18) * 1.25;
+          // The shell swells as you hold more, and that swell is real: a fat blob is a
+          // wider target, so the wave reaches it sooner than a lean one.
+          const growR = engine3dRef.current?.blobGrowScale ?? 1;
+          const blobR3D = (s.playerRadius / 18) * 1.25 * growR;
 
           if (wave3DX <= s.playerX3D + blobR3D + 1.5) {
             s.tearOffTimer += dt;
@@ -639,7 +665,10 @@ export default function App() {
 
           const waveRatio = Math.max(0, Math.min(1, (1400 - s.waveX) / 890));
           const wave3DX = 52 - waveRatio * 55;
-          const blobR3D = (s.playerRadius / 18) * 1.25;
+          // The shell swells as you hold more, and that swell is real: a fat blob is a
+          // wider target, so the wave reaches it sooner than a lean one.
+          const growR = engine3dRef.current?.blobGrowScale ?? 1;
+          const blobR3D = (s.playerRadius / 18) * 1.25 * growR;
 
           if (wave3DX <= s.playerX3D + blobR3D + 1.5) {
             s.tearOffTimer += dt;
@@ -668,11 +697,12 @@ export default function App() {
         // Update loot meshes
         for (const item of s.loot3D) {
           if (item.isAttached) {
-            const blobR3D = (s.playerRadius / 18) * 1.25;
+            const growR = engine3dRef.current?.blobGrowScale ?? 1;
+            const blobR3D = (s.playerRadius / 18) * 1.25 * growR;
             const slopeY = groundHeightAt(s.playerX3D, 0);
             item.mesh.position.set(
               s.playerX3D + Math.cos(item.attachAngle) * blobR3D,
-              slopeY + 1.0 + Math.sin(item.attachAngle) * blobR3D * 0.6,
+              slopeY + 1.0 * growR + Math.sin(item.attachAngle) * blobR3D * 0.6,
               item.attachElev * blobR3D
             );
             item.mesh.rotation.y += dt * 1.5;
@@ -880,7 +910,7 @@ export default function App() {
       {appState === 'PLAYING' && (
         <>
           {/* Low-Poly Score Card (Top Left) */}
-          <div className="absolute top-6 left-8 pointer-events-none flex flex-col gap-0.5 bg-[#FDFBF7]/95 border-2 border-[#17181C] rounded-2xl p-3.5 shadow-[0_4px_0_#17181C]">
+          <div className="absolute top-4 left-4 md:top-6 md:left-8 pointer-events-none flex flex-col gap-0.5 bg-[#FDFBF7]/95 border-2 border-[#17181C] rounded-2xl p-3 md:p-3.5 shadow-[0_4px_0_#17181C]">
             <span className="text-[10px] font-black text-[#17181C]/60 uppercase tracking-widest">
               SCORE
             </span>
@@ -890,21 +920,21 @@ export default function App() {
           </div>
 
           {/* Low-Poly Best & Wave Pill (Top Center-Right) */}
-          <div className="absolute top-24 right-4 md:top-6 md:right-48 pointer-events-none flex items-center gap-2 md:gap-3">
-            <div className="bg-[#FDFBF7]/95 border-2 border-[#17181C] rounded-2xl px-4 py-2.5 shadow-[0_4px_0_#17181C] flex flex-col items-end gap-0.5">
+          <div className="absolute top-16 right-4 md:top-6 md:right-48 pointer-events-none flex items-center gap-2 md:gap-3">
+            <div className="bg-[#FDFBF7]/95 border-2 border-[#17181C] rounded-2xl px-3 py-2 md:px-4 md:py-2.5 shadow-[0_4px_0_#17181C] flex flex-col items-end gap-0.5">
               <span className="text-[10px] font-black text-[#17181C]/60 uppercase tracking-widest">
                 BEST
               </span>
-              <span className="font-game text-2xl font-bold text-[#24698F] leading-none">
+              <span className="font-game text-xl md:text-2xl font-bold text-[#24698F] leading-none">
                 {bestScore}
               </span>
             </div>
 
-            <div className="bg-[#FDFBF7]/95 border-2 border-[#17181C] rounded-2xl px-3.5 py-2.5 shadow-[0_4px_0_#17181C] flex flex-col items-center gap-0.5">
+            <div className="bg-[#FDFBF7]/95 border-2 border-[#17181C] rounded-2xl px-3 py-2 md:px-3.5 md:py-2.5 shadow-[0_4px_0_#17181C] flex flex-col items-center gap-0.5">
               <span className="text-[10px] font-black text-[#17181C]/60 uppercase tracking-widest">
                 WAVE
               </span>
-              <span className="font-game text-2xl font-bold text-[#E8A317] leading-none">
+              <span className="font-game text-xl md:text-2xl font-bold text-[#E8A317] leading-none">
                 {wavesSurvived + 1}
               </span>
             </div>
@@ -919,14 +949,14 @@ export default function App() {
 
           {/* Wave Warning Banner */}
           {isWaveWarning && (
-            <div className="absolute top-20 left-1/2 -translate-x-1/2 z-30 pointer-events-none font-game bg-[#E25B45] border-2 border-[#17181C] text-white text-lg md:text-xl px-7 py-2 rounded-xl shadow-[0_4px_0_#17181C] tracking-widest animate-pulse">
+            <div className="absolute top-32 md:top-20 left-1/2 -translate-x-1/2 z-30 pointer-events-none font-game bg-[#E25B45] border-2 border-[#17181C] text-white text-base md:text-xl px-5 md:px-7 py-2 rounded-xl shadow-[0_4px_0_#17181C] tracking-widest animate-pulse max-w-[92vw] text-center">
               WAVE INCOMING!
             </div>
           )}
 
           {/* King Tide Banner */}
           {isKingTide && !isWaveWarning && (
-            <div className="absolute top-20 left-1/2 -translate-x-1/2 z-30 pointer-events-none font-game bg-[#F6C445] border-2 border-[#17181C] text-[#17181C] text-lg md:text-xl px-7 py-2 rounded-xl shadow-[0_4px_0_#17181C] tracking-widest animate-pulse">
+            <div className="absolute top-32 md:top-20 left-1/2 -translate-x-1/2 z-30 pointer-events-none font-game bg-[#F6C445] border-2 border-[#17181C] text-[#17181C] text-base md:text-xl px-5 md:px-7 py-2 rounded-xl shadow-[0_4px_0_#17181C] tracking-widest animate-pulse max-w-[92vw] text-center">
               KING TIDE · 2X
             </div>
           )}

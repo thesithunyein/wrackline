@@ -146,6 +146,10 @@ export class Wrackline3D {
   currentCamX = 0;
   shakeIntensity = 0;
 
+  // Greed made visible. The scuttler swells as it holds more unbanked wrack; the
+  // hitbox in App.tsx reads this, so a swollen shell really is a wider target.
+  blobGrowScale = 1;
+
   // Low-Poly Terrain & Ocean
   duneMesh!: THREE.Mesh;
   wetSandMesh!: THREE.Mesh;
@@ -258,6 +262,7 @@ export class Wrackline3D {
     // 2. Camera Setup
     const aspect = container.clientWidth / container.clientHeight;
     this.camera = new THREE.PerspectiveCamera(46, aspect, 0.5, 350);
+    this.applyFramingForAspect(aspect);
     this.camera.position.copy(this.baseCameraPos);
     this.camera.lookAt(this.baseCameraTarget);
 
@@ -1279,12 +1284,22 @@ export class Wrackline3D {
     this.shakeIntensity = intensity;
   }
 
+  // A tall, narrow viewport has a narrow horizontal field of view, which used to
+  // squeeze the sea out of frame on a phone. Widening the vertical FOV as the
+  // aspect narrows keeps the waterline and the open water on screen in portrait,
+  // and leaves landscape framing exactly as it was.
+  applyFramingForAspect(aspect: number) {
+    const portraitness = Math.max(0, Math.min(1, (1 - aspect) / 0.55));
+    this.camera.fov = 46 + portraitness * 14;
+    this.camera.aspect = aspect;
+    this.camera.updateProjectionMatrix();
+  }
+
   onResize = () => {
     if (this.isDisposed || !this.container) return;
     const w = this.container.clientWidth;
     const h = this.container.clientHeight;
-    this.camera.aspect = w / h;
-    this.camera.updateProjectionMatrix();
+    this.applyFramingForAspect(w / h);
     this.renderer.setSize(w, h);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   };
@@ -1445,11 +1460,20 @@ export class Wrackline3D {
     //      standing on, rather than on a straight ramp that only matches the beach
     //      near the middle of the shore.
     const groundSlopeY = groundHeightAt(playerX3D, 0);
+
+    // 9.4a Greed made visible. The shell swells with the value riding on it, so a big
+    //       held score reads as a big, obviously-risky body. Lift the group by the
+    //       same factor so the legs keep standing on the sand instead of sinking in.
+    const growTarget = 1 + Math.min(1, Math.max(0, heldScore) / 300) * 0.3;
+    this.blobGrowScale += (growTarget - this.blobGrowScale) * Math.min(1, dt * 3.2);
+    const grow = this.blobGrowScale;
+
     this.blobGroup.position.x = playerX3D;
-    this.blobGroup.position.y = groundSlopeY + 0.98;
+    this.blobGroup.scale.setScalar(grow);
+    this.blobGroup.position.y = groundSlopeY + 0.98 * grow;
 
     // Subtle breathing / scuttling sway
-    const breathing = Math.sin(this.oceanTime * 3) * 0.04;
+    const breathing = Math.sin(this.oceanTime * 3) * 0.04 * grow;
     this.blobGroup.position.y += breathing;
 
     // Tilt body based on forward/backward movement
