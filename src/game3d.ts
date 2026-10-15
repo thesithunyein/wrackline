@@ -81,6 +81,20 @@ function createLowPolyShadowTexture(): THREE.CanvasTexture {
 export const DUNE_OFFSET_X = 6;
 export const DUNE_OFFSET_Y = -0.6;
 
+// Sea level, matching the sea mesh built in buildLowPolyOcean(). It sits up
+// here because the beach's own waterline depends on it: the tide reaches
+// wherever the dune drops below this surface.
+export const SEA_SURFACE_Y = -2.2;
+
+// How far above still water the tide ever washes. The sea's own vertex swell
+// peaks near 0.94; 0.55 keeps the wet band where the water regularly reaches
+// instead of painting half the beach. Sand above this stays dry and pale.
+const WET_BAND_REACH = 0.55;
+
+// The wet band is the dune geometry lifted this far: a parallel offset of the
+// real surface, never a second surface to interleave with.
+const WET_LIFT = 0.03;
+
 export function duneHeight(x: number, z: number): number {
   const lx = x - DUNE_OFFSET_X;
   const duneSlope = -lx * 0.11;
@@ -89,15 +103,11 @@ export function duneHeight(x: number, z: number): number {
   return DUNE_OFFSET_Y + duneSlope + bigMounds + terrace;
 }
 
-// Wet shoreline strip. Mirrors the wetSandMesh placed at (22, -2.15, 0).
-export function shoreHeight(x: number, z: number): number {
-  const lx = x - 22;
-  return -2.15 + -lx * 0.11 + Math.sin(lx * 0.35 + z * 0.2) * 0.2;
-}
-
-// Ground under a prop: whichever of the two overlapping surfaces is on top.
+// The beach is one surface: the dune. Whatever stands on it should stand on
+// sand the player can see, so props are held just above still water where the
+// beach runs under the sea instead of sinking out of sight.
 export function groundHeightAt(x: number, z: number): number {
-  return Math.max(duneHeight(x, z), shoreHeight(x, z));
+  return Math.max(duneHeight(x, z), SEA_SURFACE_Y + 0.05);
 }
 
 // ---------------------------------------------------------------------------
@@ -134,7 +144,6 @@ export function portraitAimX(
 // surface is rebuilt each frame (see update()) so the surge can be draped onto
 // whatever beach it happens to be crossing.
 // ---------------------------------------------------------------------------
-export const SEA_SURFACE_Y = -2.2; // matches the sea mesh position
 const WAVE_HEIGHT = 1.55;
 const WAVE_PEAK_X = 2.0;
 const WAVE_DEPTH = 40; // long-shore span of the breaker
@@ -572,22 +581,25 @@ export class Wrackline3D {
     this.duneMesh.receiveShadow = true;
     this.scene.add(this.duneMesh);
 
-    // Shoreline wet sand strip
-    const wetGeoRaw = new THREE.PlaneGeometry(36, 80, 20, 24);
-    wetGeoRaw.rotateX(-Math.PI / 2);
-    const wpos = wetGeoRaw.attributes.position;
-    for (let i = 0; i < wpos.count; i++) {
-      const x = wpos.getX(i);
-      const z = wpos.getZ(i);
-      const slope = -x * 0.11;
-      const ripple = Math.sin(x * 0.35 + z * 0.2) * 0.2;
-      wpos.setY(i, slope + ripple);
+    // Wet shore band: the dune's own triangles, lifted a hair and clipped to
+    // the reach of the tide. Built from the dune geometry itself so the two
+    // surfaces can never interleave: the band IS the beach, only painted wet,
+    // and its inland edge is the waterline rather than a rectangle's edge.
+    const duneVerts = nonIndexedDunes.attributes.position.array as ArrayLike<number>;
+    const kept: number[] = [];
+    const tideReach = SEA_SURFACE_Y + WET_BAND_REACH;
+    for (let t = 0; t < duneVerts.length; t += 9) {
+      // World Y of the triangle's centroid (the dune mesh sits at DUNE_OFFSET_Y).
+      const cy = (duneVerts[t + 1] + duneVerts[t + 4] + duneVerts[t + 7]) / 3 + DUNE_OFFSET_Y;
+      if (cy > tideReach) continue; // dry sand the tide never washes
+      for (let k = 0; k < 9; k++) kept.push(duneVerts[t + k]);
     }
-    const nonIndexedWet = wetGeoRaw.toNonIndexed();
-    nonIndexedWet.computeVertexNormals();
+    const wetGeo = new THREE.BufferGeometry();
+    wetGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(kept), 3));
+    wetGeo.computeVertexNormals();
 
-    this.wetSandMesh = new THREE.Mesh(nonIndexedWet, this.wetSandMat);
-    this.wetSandMesh.position.set(22, -2.15, 0);
+    this.wetSandMesh = new THREE.Mesh(wetGeo, this.wetSandMat);
+    this.wetSandMesh.position.set(DUNE_OFFSET_X, DUNE_OFFSET_Y + WET_LIFT, 0);
     this.wetSandMesh.receiveShadow = true;
     this.scene.add(this.wetSandMesh);
   }
