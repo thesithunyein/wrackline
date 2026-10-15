@@ -972,7 +972,7 @@ export default function App() {
             <span className="text-[#17181C]/25 hidden sm:inline">|</span>
             <div className="flex items-center gap-1.5">
               <span className="font-game text-sm text-[#E25B45]">03</span>
-              <span>FLEE HIGH TIDE</span>
+              <span>BANK BEFORE THE SURGE</span>
             </div>
           </div>
         </div>
@@ -1167,7 +1167,7 @@ export default function App() {
                 <div>
                   <span className="font-game text-sm text-[#17181C] block">MOVE</span>
                   <span className="text-xs text-[#17181C]/85 font-bold">
-                    [A] / [D] or Arrows to scuttle beach.
+                    Hold [A] / [D], the arrow keys, or the buttons on screen.
                   </span>
                 </div>
               </div>

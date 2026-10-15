@@ -98,6 +98,34 @@ export function groundHeightAt(x: number, z: number): number {
 }
 
 // ---------------------------------------------------------------------------
+// Camera framing maths, kept pure so the portrait framing can be reasoned about
+// (and measured) without a canvas.
+//
+// A tall, narrow frame has a narrow horizontal field of view, so a camera that
+// simply aims at the scuttler pins it to dead centre: the shore slides past but
+// the character itself never appears to move. The portrait aim therefore sits a
+// bounded distance BEHIND the direction of travel, which makes the scuttler
+// visibly lunge to that side while it scuttles and settle back to centre when
+// the player lets go. Bounding the lead as a share of the frame's half-width is
+// what stops that swing from ever reaching the edge of a phone screen.
+// ---------------------------------------------------------------------------
+export function frameHalfWidth(camZ: number, fovDeg: number, aspect: number): number {
+  return Math.abs(camZ) * Math.tan((fovDeg * Math.PI) / 360) * aspect;
+}
+
+export const PORTRAIT_LEAD_TIME = 0.2; // seconds of travel the aim trails behind
+
+export function portraitAimX(
+  playerX3D: number,
+  playerSpeed: number,
+  halfFrameWidth: number
+): number {
+  const maxLead = halfFrameWidth * 0.4;
+  const lead = Math.max(-maxLead, Math.min(maxLead, playerSpeed * PORTRAIT_LEAD_TIME));
+  return playerX3D - lead;
+}
+
+// ---------------------------------------------------------------------------
 // Breaker geometry, expressed in the wave group's own local frame. Local +X
 // points out to sea and local X = 0 is the leading toe of the wave. Every
 // surface is rebuilt each frame (see update()) so the surge can be draped onto
@@ -150,8 +178,15 @@ export class Wrackline3D {
   // hitbox in App.tsx reads this, so a swollen shell really is a wider target.
   blobGrowScale = 1;
 
-  // 0 on a wide screen, 1 on a fully tall phone screen. Drives the portrait camera.
+  // 0 on a wide screen, 1 once the frame is comfortably taller than it is wide.
+  // Drives every portrait camera adjustment: field of view, camera height and
+  // distance, follow rate, and how far the aim leads the scuttler.
   portraitness = 0;
+
+  // Smoothed scuttling speed (world units per second), used to lead the portrait
+  // camera so the character visibly lunges in the direction it is travelling.
+  playerSpeed = 0;
+  lastPlayerX = 0;
 
   // Low-Poly Terrain & Ocean
   duneMesh!: THREE.Mesh;
@@ -1292,7 +1327,11 @@ export class Wrackline3D {
   // aspect narrows keeps the waterline and the open water on screen in portrait,
   // and leaves landscape framing exactly as it was.
   applyFramingForAspect(aspect: number) {
-    this.portraitness = Math.max(0, Math.min(1, (1 - aspect) / 0.55));
+    // Saturating at 0.4 rather than 0.55 matters: a phone whose browser keeps a
+    // toolbar sits nearer aspect 0.6 than a bare 0.46 screen, and it wants the
+    // full phone framing rather than a half-applied blend that leaves the
+    // scuttler drifting toward the edge of the frame.
+    this.portraitness = Math.max(0, Math.min(1, (1 - aspect) / 0.4));
     // Only a gentle widening here: the portrait camera below does the real work of
     // keeping the scuttler large, so the field of view does not have to over-expand.
     this.camera.fov = 46 + this.portraitness * 6;
@@ -1540,25 +1579,47 @@ export class Wrackline3D {
     }
 
     // 9.5 Camera Tracking with Low-Poly Isometric Flare.
-    //     A tall, narrow screen has a narrow horizontal field of view, which used to
-    //     leave the scuttler small and pinned near the left edge, so its movement
-    //     barely read on a phone. In portrait the camera sits closer, follows the
-    //     scuttler much more tightly and aims straight at it, so the character stays
-    //     large and centred and the shore visibly slides past as it scuttles.
+    //     A tall, narrow screen has a narrow horizontal field of view, so the
+    //     scuttler has to be framed deliberately: the camera sits closer and
+    //     follows it tightly to keep it large, while the aim trails a little
+    //     behind the direction of travel so the character visibly lunges as it
+    //     scuttles instead of sitting pinned to the middle of the frame.
     const p = this.portraitness;
-    const follow = 0.65 - p * 0.34;
+
+    // How fast the scuttler is actually crossing the sand, smoothed slightly so a
+    // single stuttering frame cannot fling the camera around.
+    // A restart teleports the scuttler back to the start of the shore, and a
+    // long frame gap would fake an enormous speed; neither is scuttling, so
+    // anything beyond a real step is ignored rather than flung into the camera.
+    const step = playerX3D - this.lastPlayerX;
+    const instSpeed = dt > 0 && Math.abs(step) < 2 ? step / dt : 0;
+    this.lastPlayerX = playerX3D;
+    this.playerSpeed += (instSpeed - this.playerSpeed) * Math.min(1, dt * 9);
+
+    // Portrait follows the scuttler far more tightly than landscape does. The
+    // beach runs 21 world units and a tall frame only shows about five of them,
+    // so a loose follow leaves the character aimed at dead centre but standing
+    // that much further from the lens at the top of the shore, where it shrinks
+    // to a fifth of the screen width. A tight follow holds it at one size for
+    // the whole beach and makes the shore rush past instead.
+    const follow = 0.65 + p * 0.28;
     const targetCamX = playerX3D * follow;
     this.currentCamX += (targetCamX - this.currentCamX) * Math.min(1, dt * 4.5);
 
     this.camera.position.x = this.baseCameraPos.x + this.currentCamX;
     this.camera.position.y = this.baseCameraPos.y - p * 0.2;
-    this.camera.position.z = this.baseCameraPos.z - p * 3.5;
+    this.camera.position.z = this.baseCameraPos.z - p * 2.0;
 
-    // Landscape keeps the original framing. Portrait lerps the aim onto the scuttler
-    // itself, which is what centres the character on a phone screen.
+    // Landscape keeps the original framing. Portrait leans the aim off the
+    // character in whatever direction it is running.
     const landscapeLookX = this.baseCameraTarget.x + this.currentCamX * 0.8;
+    const portraitLookX = portraitAimX(
+      playerX3D,
+      this.playerSpeed,
+      frameHalfWidth(this.camera.position.z, this.camera.fov, this.camera.aspect)
+    );
     const lookTarget = new THREE.Vector3(
-      landscapeLookX * (1 - p) + playerX3D * p,
+      landscapeLookX * (1 - p) + portraitLookX * p,
       this.baseCameraTarget.y,
       this.baseCameraTarget.z
     );
