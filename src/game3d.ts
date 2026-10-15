@@ -150,6 +150,9 @@ export class Wrackline3D {
   // hitbox in App.tsx reads this, so a swollen shell really is a wider target.
   blobGrowScale = 1;
 
+  // 0 on a wide screen, 1 on a fully tall phone screen. Drives the portrait camera.
+  portraitness = 0;
+
   // Low-Poly Terrain & Ocean
   duneMesh!: THREE.Mesh;
   wetSandMesh!: THREE.Mesh;
@@ -1289,8 +1292,10 @@ export class Wrackline3D {
   // aspect narrows keeps the waterline and the open water on screen in portrait,
   // and leaves landscape framing exactly as it was.
   applyFramingForAspect(aspect: number) {
-    const portraitness = Math.max(0, Math.min(1, (1 - aspect) / 0.55));
-    this.camera.fov = 46 + portraitness * 14;
+    this.portraitness = Math.max(0, Math.min(1, (1 - aspect) / 0.55));
+    // Only a gentle widening here: the portrait camera below does the real work of
+    // keeping the scuttler large, so the field of view does not have to over-expand.
+    this.camera.fov = 46 + this.portraitness * 6;
     this.camera.aspect = aspect;
     this.camera.updateProjectionMatrix();
   }
@@ -1534,16 +1539,26 @@ export class Wrackline3D {
       }
     }
 
-    // 9.5 Camera Tracking with Low-Poly Isometric Flare
-    const targetCamX = playerX3D * 0.65;
+    // 9.5 Camera Tracking with Low-Poly Isometric Flare.
+    //     A tall, narrow screen has a narrow horizontal field of view, which used to
+    //     leave the scuttler small and pinned near the left edge, so its movement
+    //     barely read on a phone. In portrait the camera sits closer, follows the
+    //     scuttler much more tightly and aims straight at it, so the character stays
+    //     large and centred and the shore visibly slides past as it scuttles.
+    const p = this.portraitness;
+    const follow = 0.65 - p * 0.34;
+    const targetCamX = playerX3D * follow;
     this.currentCamX += (targetCamX - this.currentCamX) * Math.min(1, dt * 4.5);
 
     this.camera.position.x = this.baseCameraPos.x + this.currentCamX;
-    this.camera.position.y = this.baseCameraPos.y;
-    this.camera.position.z = this.baseCameraPos.z;
+    this.camera.position.y = this.baseCameraPos.y - p * 0.2;
+    this.camera.position.z = this.baseCameraPos.z - p * 3.5;
 
+    // Landscape keeps the original framing. Portrait lerps the aim onto the scuttler
+    // itself, which is what centres the character on a phone screen.
+    const landscapeLookX = this.baseCameraTarget.x + this.currentCamX * 0.8;
     const lookTarget = new THREE.Vector3(
-      this.baseCameraTarget.x + this.currentCamX * 0.8,
+      landscapeLookX * (1 - p) + playerX3D * p,
       this.baseCameraTarget.y,
       this.baseCameraTarget.z
     );

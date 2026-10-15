@@ -25,6 +25,7 @@ interface DiffConfig {
   warningDuration: number;
   multiplier: number;
   haulSpeed: number;
+  hearts: number;
 }
 
 const DIFFS: Record<string, DiffConfig> = {
@@ -35,7 +36,8 @@ const DIFFS: Record<string, DiffConfig> = {
     baseLowTide: 7.0,
     warningDuration: 1.8,
     multiplier: 1.0,
-    haulSpeed: 790
+    haulSpeed: 790,
+    hearts: 4
   },
   SURF: {
     name: 'SURF',
@@ -44,7 +46,8 @@ const DIFFS: Record<string, DiffConfig> = {
     baseLowTide: 5.0,
     warningDuration: 1.3,
     multiplier: 1.7,
-    haulSpeed: 700
+    haulSpeed: 700,
+    hearts: 3
   },
   STORM: {
     name: 'STORM',
@@ -53,9 +56,18 @@ const DIFFS: Record<string, DiffConfig> = {
     baseLowTide: 3.6,
     warningDuration: 0.9,
     multiplier: 2.8,
-    haulSpeed: 630
+    haulSpeed: 630,
+    hearts: 2
   }
 };
+
+// A season is seven waves, and surviving all of them is the win. Hearts are the only
+// losing condition, so the wrack line no longer ends a run by surprise — it just keeps
+// eating the shore, which makes the closing waves tighter. Every ending has a cause.
+type EndCause = 'SURGE' | 'SURVIVED';
+const SEASON_WAVES = 7;
+const WRACK_LINE_RETREAT = 11;
+const INVULN_TIME = 1.2;
 
 interface FloatingPopup {
   id: number;
@@ -67,7 +79,7 @@ interface FloatingPopup {
 }
 
 export default function App() {
-  const [appState, setAppState] = useState<'LOADING' | 'TITLE' | 'PLAYING' | 'DEAD'>('LOADING');
+  const [appState, setAppState] = useState<'LOADING' | 'TITLE' | 'PLAYING' | 'DEAD' | 'WIN'>('LOADING');
   const [loadProgress, setLoadProgress] = useState<number>(0);
 
   const [selectedDiff, setSelectedDiff] = useState<DiffConfig>(DIFFS.SURF);
@@ -85,6 +97,9 @@ export default function App() {
   const [isNewBest, setIsNewBest] = useState<boolean>(false);
   const [isKingTide, setIsKingTide] = useState<boolean>(false);
   const [isWaveWarning, setIsWaveWarning] = useState<boolean>(false);
+  const [hearts, setHearts] = useState<number>(DIFFS.SURF.hearts);
+  const [endCause, setEndCause] = useState<EndCause>('SURGE');
+  const [hurtFlash, setHurtFlash] = useState<boolean>(false);
   const [muted, setMuted] = useState<boolean>(getIsMuted);
   const [popups, setPopups] = useState<FloatingPopup[]>([]);
   const [wavesSurvived, setWavesSurvived] = useState<number>(0);
@@ -111,7 +126,11 @@ export default function App() {
 
   // Synchronous Game State Ref
   const stateRef = useRef({
-    gameState: 'LOADING' as 'LOADING' | 'TITLE' | 'PLAYING' | 'DEAD',
+    gameState: 'LOADING' as 'LOADING' | 'TITLE' | 'PLAYING' | 'DEAD' | 'WIN',
+    hearts: 3,
+    heartLostThisWave: false,
+    invulnTimer: 0,
+    endCause: 'SURGE' as EndCause,
     currentDiff: DIFFS.SURF,
     banked: 0,
     held: 0,
@@ -312,6 +331,7 @@ export default function App() {
     s.phaseTimer = 0;
     s.waveX = 1400;
     s.tearOffTimer = 0;
+    s.heartLostThisWave = false;
     setIsWaveWarning(false);
     stopRumble();
     playCrash();
@@ -326,25 +346,41 @@ export default function App() {
     s.cyclePhase = 'WAVE_RETREAT';
   }, []);
 
+  // End the run with a cause the player can name. Survivors get a win screen and the
+  // offer of a harder tide; the caught get told exactly what caught them.
+  const endRun = useCallback((cause: EndCause) => {
+    const s = stateRef.current;
+    s.endCause = cause;
+    s.gameState = cause === 'SURVIVED' ? 'WIN' : 'DEAD';
+    s.deathTime = Date.now();
+    stopRumble();
+    setEndCause(cause);
+    setAppState(cause === 'SURVIVED' ? 'WIN' : 'DEAD');
+    if (cause === 'SURVIVED') {
+      playThock();
+    } else {
+      playDeath();
+    }
+    checkSaveBest(s.banked);
+  }, [checkSaveBest]);
+
   const finishCycle = useCallback(() => {
     const s = stateRef.current;
     s.waveIndex += 1;
     setWavesSurvived(s.waveIndex);
 
-    s.wrackLineX -= 18;
+    // The tide keeps taking the shore, but it never kills on its own: it just pushes
+    // the wrack line further up the beach, so the closing waves are thinner pickings.
+    s.wrackLineX -= WRACK_LINE_RETREAT;
     playWrackCrunch();
 
-    if (s.wrackLineX <= 660) {
-      s.gameState = 'DEAD';
-      s.deathTime = Date.now();
-      setAppState('DEAD');
-      playDeath();
-      checkSaveBest(s.banked);
+    if (s.waveIndex >= SEASON_WAVES) {
+      endRun('SURVIVED');
       return;
     }
 
     enterLowTide();
-  }, [checkSaveBest, enterLowTide]);
+  }, [endRun, enterLowTide]);
 
   // Start / Restart Game
   const startGame = useCallback((diff: DiffConfig) => {
@@ -360,6 +396,10 @@ export default function App() {
     s.isKingTide = false;
     s.lastWaveWasKing = false;
     s.dryWaves = 0;
+    s.hearts = diff.hearts;
+    s.heartLostThisWave = false;
+    s.invulnTimer = 0;
+    s.endCause = 'SURGE';
     s.hasGivenFirstInput = false;
     s.playerX3D = 0;
     s.isMoving = false;
@@ -374,6 +414,8 @@ export default function App() {
     setIsNewBest(false);
     setIsKingTide(false);
     setIsWaveWarning(false);
+    setHearts(diff.hearts);
+    setHurtFlash(false);
     setWavesSurvived(0);
     setPopups([]);
     setShowInputCue(true);
@@ -503,6 +545,16 @@ export default function App() {
       const code = e.code;
       const key = e.key;
 
+      // One press back into the water. Runs are about a minute, so making the retry
+      // free is what turns a loss into "one more go" instead of a stop point.
+      if (
+        (code === 'KeyR' || code === 'Enter') &&
+        (stateRef.current.gameState === 'DEAD' || stateRef.current.gameState === 'WIN')
+      ) {
+        startGame(stateRef.current.currentDiff);
+        return;
+      }
+
       if (code === 'KeyM') {
         setMuted(toggleMute());
         return;
@@ -577,7 +629,7 @@ export default function App() {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [startHaul, endHaul, toggleFullscreen]);
+  }, [startHaul, endHaul, toggleFullscreen, startGame]);
 
   // Main 60FPS Game Loop
   useEffect(() => {
@@ -591,6 +643,8 @@ export default function App() {
       const s = stateRef.current;
 
       if (s.gameState === 'PLAYING') {
+        s.invulnTimer = Math.max(0, s.invulnTimer - dt);
+
         let moveDir = 0;
         if (keysRef.current.forward) moveDir += 1;
         if (keysRef.current.backward) moveDir -= 1;
@@ -644,6 +698,24 @@ export default function App() {
           const blobR3D = (s.playerRadius / 18) * 1.25 * growR;
 
           if (wave3DX <= s.playerX3D + blobR3D + 1.5) {
+            // The surge only wounds you if it catches you still holding loot. Wading
+            // through it with empty claws is survivable, so the mistake has a name:
+            // greed. One heart per wave, with a moment of grace after the hit.
+            if (s.attached3D.length > 0 && !s.heartLostThisWave && s.invulnTimer <= 0) {
+              s.heartLostThisWave = true;
+              s.invulnTimer = INVULN_TIME;
+              s.hearts -= 1;
+              setHearts(s.hearts);
+              setHurtFlash(true);
+              window.setTimeout(() => setHurtFlash(false), 420);
+              playCrash();
+              if (engine3dRef.current) engine3dRef.current.triggerImpactShake(0.85);
+
+              if (s.hearts <= 0) {
+                endRun('SURGE');
+              }
+            }
+
             s.tearOffTimer += dt;
             if (s.tearOffTimer >= 0.125 && s.attached3D.length > 0) {
               s.tearOffTimer = 0;
@@ -736,7 +808,7 @@ export default function App() {
 
     animId = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(animId);
-  }, [enterWarning, enterSweep, enterRetreat, finishCycle]);
+  }, [enterWarning, enterSweep, enterRetreat, finishCycle, endRun]);
 
   return (
     <div className="relative w-screen h-screen overflow-hidden select-none bg-[#D4E6F4] flex items-center justify-center font-ui">
@@ -909,6 +981,11 @@ export default function App() {
       {/* 3. PLAYING HUD */}
       {appState === 'PLAYING' && (
         <>
+          {/* Damage flash — fires the moment a surge catches you holding loot */}
+          {hurtFlash && (
+            <div className="absolute inset-0 z-20 pointer-events-none bg-[#E25B45]/25 border-8 border-[#E25B45]/60" />
+          )}
+
           {/* Low-Poly Score Card (Top Left) */}
           <div className="absolute top-4 left-4 md:top-6 md:left-8 pointer-events-none flex flex-col gap-0.5 bg-[#FDFBF7]/95 border-2 border-[#17181C] rounded-2xl p-3 md:p-3.5 shadow-[0_4px_0_#17181C]">
             <span className="text-[10px] font-black text-[#17181C]/60 uppercase tracking-widest">
@@ -917,6 +994,17 @@ export default function App() {
             <span className="font-game text-4xl md:text-5xl font-bold text-[#17181C] tracking-tight leading-none">
               {displayedBanked}
             </span>
+            {/* Hearts: the only way to lose. A wave that catches you holding costs one. */}
+            <div className="flex items-center gap-1 mt-1">
+              {Array.from({ length: selectedDiff.hearts }).map((_, i) => (
+                <span
+                  key={i}
+                  className={`text-base leading-none ${i < hearts ? 'text-[#E25B45]' : 'text-[#17181C]/20'}`}
+                >
+                  ♥
+                </span>
+              ))}
+            </div>
           </div>
 
           {/* Low-Poly Best & Wave Pill (Top Center-Right) */}
@@ -973,21 +1061,19 @@ export default function App() {
           {/* Low-Poly Tactile 3D On-Screen Controls */}
           <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-4">
             <button
-              onMouseDown={() => {
+              // Pointer events with capture: on a phone the finger often slides off the
+              // button mid-hold, and capture keeps the key held until it is released.
+              onPointerDown={e => {
+                e.preventDefault();
+                e.currentTarget.setPointerCapture(e.pointerId);
                 keysRef.current.backward = true;
                 setActiveKeys(prev => ({ ...prev, backward: true }));
               }}
-              onMouseUp={() => {
+              onPointerUp={() => {
                 keysRef.current.backward = false;
                 setActiveKeys(prev => ({ ...prev, backward: false }));
               }}
-              onTouchStart={e => {
-                e.preventDefault();
-                keysRef.current.backward = true;
-                setActiveKeys(prev => ({ ...prev, backward: true }));
-              }}
-              onTouchEnd={e => {
-                e.preventDefault();
+              onPointerCancel={() => {
                 keysRef.current.backward = false;
                 setActiveKeys(prev => ({ ...prev, backward: false }));
               }}
@@ -1012,6 +1098,10 @@ export default function App() {
                 e.preventDefault();
                 endHaul();
               }}
+              onTouchCancel={e => {
+                e.preventDefault();
+                endHaul();
+              }}
               className={`px-9 h-14 rounded-xl border-2 border-[#17181C] font-game text-lg tracking-widest flex items-center gap-2 transition-all cursor-pointer ${
                 activeKeys.haul
                   ? 'bg-[#F6C445] text-[#17181C] translate-y-[2px] shadow-[0_1px_0_#17181C]'
@@ -1023,21 +1113,17 @@ export default function App() {
             </button>
 
             <button
-              onMouseDown={() => {
+              onPointerDown={e => {
+                e.preventDefault();
+                e.currentTarget.setPointerCapture(e.pointerId);
                 keysRef.current.forward = true;
                 setActiveKeys(prev => ({ ...prev, forward: true }));
               }}
-              onMouseUp={() => {
+              onPointerUp={() => {
                 keysRef.current.forward = false;
                 setActiveKeys(prev => ({ ...prev, forward: false }));
               }}
-              onTouchStart={e => {
-                e.preventDefault();
-                keysRef.current.forward = true;
-                setActiveKeys(prev => ({ ...prev, forward: true }));
-              }}
-              onTouchEnd={e => {
-                e.preventDefault();
+              onPointerCancel={() => {
                 keysRef.current.forward = false;
                 setActiveKeys(prev => ({ ...prev, forward: false }));
               }}
@@ -1109,9 +1195,21 @@ export default function App() {
               <div className="bg-[#EAD7B0]/30 p-3 rounded-xl border-2 border-[#17181C]/20 flex items-start gap-3">
                 <span className="font-game text-xl text-[#E25B45]">04</span>
                 <div>
-                  <span className="font-game text-sm text-[#17181C] block">SURVIVE</span>
+                  <span className="font-game text-sm text-[#17181C] block">DON&apos;T GET CAUGHT HOLDING</span>
                   <span className="text-xs text-[#17181C]/85 font-bold">
-                    Retreat before the ocean wave crashes!
+                    A wave that hits you while you still hold loot costs a heart ♥. Bank first, or
+                    wade through with empty claws.
+                  </span>
+                </div>
+              </div>
+
+              <div className="bg-[#EAD7B0]/30 p-3 rounded-xl border-2 border-[#17181C]/20 flex items-start gap-3">
+                <span className="font-game text-xl text-[#24698F]">05</span>
+                <div>
+                  <span className="font-game text-sm text-[#17181C] block">OUTLAST THE SEASON</span>
+                  <span className="text-xs text-[#17181C]/85 font-bold">
+                    Survive all {SEASON_WAVES} waves to win. Lose your last heart and the surge takes
+                    you.
                   </span>
                 </div>
               </div>
@@ -1128,15 +1226,20 @@ export default function App() {
         </div>
       )}
 
-      {/* 5. LOW-POLY GAME OVER SCREEN */}
-      {appState === 'DEAD' && (
+      {/* 5. LOW-POLY END-OF-RUN SCREEN — the season's result, win or loss */}
+      {(appState === 'DEAD' || appState === 'WIN') && (
         <div className="absolute inset-0 bg-[#D4E6F4]/92 backdrop-blur-sm flex flex-col items-center justify-center z-50 pointer-events-auto p-5 md:p-6">
           <WracklineLogo size="sm" showTitle={false} className="mb-3 md:mb-4" />
 
-          {/* Short Game Title */}
-          <h2 className="font-game text-4xl md:text-5xl text-[#17181C] tracking-wide mb-6 md:mb-8">
-            HIGH TIDE
+          {/* The headline names the cause: survived the season, or caught by a surge */}
+          <h2 className={`font-game text-3xl md:text-5xl tracking-wide text-center mb-2 ${endCause === 'SURVIVED' ? 'text-[#24698F]' : 'text-[#17181C]'}`}>
+            {endCause === 'SURVIVED' ? 'OUTLASTED THE TIDE' : 'THE SURGE TOOK YOU'}
           </h2>
+          <p className="text-[10px] md:text-xs font-black text-[#17181C]/60 uppercase tracking-widest mb-5 md:mb-7 text-center">
+            {endCause === 'SURVIVED'
+              ? `all ${SEASON_WAVES} waves survived · ${selectedDiff.name} tide`
+              : `caught holding loot on wave ${wavesSurvived + 1}`}
+          </p>
 
           {/* Low-Poly Faceted Scorecard */}
           <div className="bg-[#FDFBF7] border-3 border-[#17181C] rounded-3xl shadow-[0_8px_0_#17181C] w-76 flex flex-col items-center p-6 md:p-7 mb-7 md:mb-9">
@@ -1159,8 +1262,24 @@ export default function App() {
             </div>
           </div>
 
+          {/* Near-miss framing: how close the last run came is the pull to go again */}
+          {endCause === 'SURGE' && !isNewBest && bestScore > bankedScore && (
+            <p className="font-game text-sm md:text-base text-[#E25B45] mb-5 md:mb-6">
+              {bestScore - bankedScore} TO BEAT YOUR BEST
+            </p>
+          )}
+
           {/* Low-Poly Tactile Action Buttons */}
           <div className="flex flex-wrap items-center justify-center gap-3 md:gap-5">
+            {endCause === 'SURVIVED' && (
+              <button
+                onClick={() => startGame(selectedDiff.name === 'CALM' ? DIFFS.SURF : DIFFS.STORM)}
+                className="px-7 py-3.5 rounded-2xl bg-[#F6C445] hover:bg-[#EAD7B0] text-[#17181C] font-game text-xl tracking-wider border-2 border-[#17181C] shadow-[0_5px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] transition-all cursor-pointer"
+              >
+                HARDER TIDE
+              </button>
+            )}
+
             <button
               onClick={() => startGame(selectedDiff)}
               className="px-8 py-3.5 rounded-2xl bg-[#17181C] hover:bg-[#24698F] text-[#FFFDF8] font-game text-xl tracking-wider border-2 border-[#17181C] shadow-[0_5px_0_#0D0E10] active:translate-y-[2px] active:shadow-[0_1px_0_#0D0E10] transition-all cursor-pointer"
@@ -1175,6 +1294,10 @@ export default function App() {
               MENU
             </button>
           </div>
+
+          <p className="mt-5 text-[10px] font-black text-[#17181C]/45 uppercase tracking-widest">
+            Press R to go again
+          </p>
         </div>
       )}
     </div>
