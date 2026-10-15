@@ -17,6 +17,9 @@ export interface Loot3DItem {
   attachAngle: number;
   attachElev: number;
   sparkleGroup?: THREE.Group;
+  // Spilled by digging in. The item is on the sand rather than in the claws, it
+  // cannot be gathered again, and the surge takes it as it passes.
+  doomed?: boolean;
 }
 
 // Procedural Atmospheric Sky Gradient for Low-Poly Horizon
@@ -1360,7 +1363,9 @@ export class Wrackline3D {
     lootItems: Loot3DItem[],
     playerX3D: number = 0,
     isMoving: boolean = false,
-    moveDir: number = 0
+    moveDir: number = 0,
+    burrowAmount: number = 0,
+    waveDrawdown: number = 0
   ) {
     if (this.isDisposed) return;
     this.oceanTime += dt;
@@ -1406,6 +1411,11 @@ export class Wrackline3D {
       pos.needsUpdate = true;
       this.seaGeoNonIndexed.computeVertexNormals();
     }
+
+    // 9.1a The draw. Before a surge the sea pulls back and drops off the beach.
+    //      With the text warning gone this is the entire tell, so it is written
+    //      large: the whole sea plane sinks and the shore in front of you bares.
+    this.seaMesh.position.y = -2.2 - waveDrawdown * 0.95;
 
     // 9.2 Position Wrack Line Flotsam
     const wrackTargetX = 4 + wrackLineRatio * 14;
@@ -1516,9 +1526,21 @@ export class Wrackline3D {
     this.blobGroup.scale.setScalar(grow);
     this.blobGroup.position.y = groundSlopeY + 0.98 * grow;
 
-    // Subtle breathing / scuttling sway
-    const breathing = Math.sin(this.oceanTime * 3) * 0.04 * grow;
+    // Subtle breathing / scuttling sway. Burrowed, the creature is holding still,
+    // so the idle sway fades out with the depth.
+    const breathing = Math.sin(this.oceanTime * 3) * 0.04 * grow * (1 - burrowAmount);
     this.blobGroup.position.y += breathing;
+
+    // 9.4b Dug in. The creature sinks below the sand line and its contact shadow
+    //       goes with it, so "safe" is something you can see rather than a number
+    //       on the HUD.
+    const shadowMat = this.blobShadow?.material as THREE.MeshBasicMaterial | undefined;
+    if (burrowAmount > 0) {
+      this.blobGroup.position.y -= burrowAmount * 0.8;
+      if (shadowMat) shadowMat.opacity = 0.75 * (1 - burrowAmount * 0.85);
+    } else if (shadowMat) {
+      shadowMat.opacity = 0.75;
+    }
 
     // Tilt body based on forward/backward movement
     const targetTiltZ = isMoving ? (moveDir > 0 ? -0.16 : 0.14) : 0;

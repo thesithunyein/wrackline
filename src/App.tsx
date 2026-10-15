@@ -61,13 +61,36 @@ const DIFFS: Record<string, DiffConfig> = {
   }
 };
 
-// A season is seven waves, and surviving all of them is the win. Hearts are the only
-// losing condition, so the wrack line no longer ends a run by surprise — it just keeps
+// A season is thirteen waves, and surviving all of them is the win. Hearts are the only
+// losing condition, so the wrack line never ends a run by surprise — it just keeps
 // eating the shore, which makes the closing waves tighter. Every ending has a cause.
+//
+// The low-tide window used to floor out at wave seven, which meant waves seven through
+// a hundred were all the same wave. It now keeps closing to the last wave, so the
+// season reads as a ladder rather than a plateau.
 type EndCause = 'SURGE' | 'SURVIVED';
-const SEASON_WAVES = 7;
-const WRACK_LINE_RETREAT = 11;
+const SEASON_WAVES = 13;
+const WRACK_LINE_RETREAT = 8;
 const INVULN_TIME = 1.2;
+
+// Digging in. Held under the sand the surge passes over you unharmed, and the price is
+// everything in your claws: the haul spills onto the sand and the water takes it.
+const DIG_IN_TIME = 0.3;
+
+// Named stretches of the season, so a run has rungs without a level-select screen.
+const TIERS: { from: number; name: string }[] = [
+  { from: 1, name: 'SHALLOWS' },
+  { from: 4, name: 'THE WRACK' },
+  { from: 7, name: 'DEEP DRAW' },
+  { from: 10, name: 'BLACK TIDE' },
+  { from: 13, name: "SEASON'S END" }
+];
+
+function tierForWave(wave: number): string {
+  let name = TIERS[0].name;
+  for (const t of TIERS) if (wave >= t.from) name = t.name;
+  return name;
+}
 
 interface FloatingPopup {
   id: number;
@@ -76,10 +99,18 @@ interface FloatingPopup {
   y: number;
   alpha: number;
   isGold: boolean;
+  // Grabs tick past in a stream, so they are quiet and small. Banks are the loud ones.
+  size: 'small' | 'big';
 }
 
 export default function App() {
-  const [appState, setAppState] = useState<'LOADING' | 'TITLE' | 'PLAYING' | 'DEAD' | 'WIN'>('LOADING');
+  const [appState, setAppState] = useState<'LOADING' | 'TITLE' | 'PLAYING' | 'DEAD' | 'WIN' | 'ERROR'>(
+    'LOADING'
+  );
+  const [webglFailed, setWebglFailed] = useState<boolean>(false);
+  const [paused, setPaused] = useState<boolean>(false);
+  const [waveIntro, setWaveIntro] = useState<string | null>(null);
+  const [burrowed, setBurrowed] = useState<boolean>(false);
   const [loadProgress, setLoadProgress] = useState<number>(0);
 
   const [selectedDiff, setSelectedDiff] = useState<DiffConfig>(DIFFS.SURF);
@@ -110,7 +141,8 @@ export default function App() {
   const [activeKeys, setActiveKeys] = useState({
     forward: false,
     backward: false,
-    haul: false
+    haul: false,
+    burrow: false
   });
 
   // 3D Container & Engine Ref
@@ -121,12 +153,18 @@ export default function App() {
   const keysRef = useRef({
     forward: false,
     backward: false,
-    haul: false
+    haul: false,
+    burrow: false
   });
+
+  // Pause lives in a ref as well as state: the animation frame reads the ref, and the
+  // HUD reads the state.
+  const pausedRef = useRef(false);
+  const introTimerRef = useRef<number | null>(null);
 
   // Synchronous Game State Ref
   const stateRef = useRef({
-    gameState: 'LOADING' as 'LOADING' | 'TITLE' | 'PLAYING' | 'DEAD' | 'WIN',
+    gameState: 'LOADING' as 'LOADING' | 'TITLE' | 'PLAYING' | 'DEAD' | 'WIN' | 'ERROR',
     hearts: 3,
     heartLostThisWave: false,
     invulnTimer: 0,
@@ -145,6 +183,10 @@ export default function App() {
     dryWaves: 0,
     wrackLineX: 780,
     isHolding: false,
+    // Digging in: a wind-up, then safe under the sand, at the price of the haul.
+    digging: false,
+    digTimer: 0,
+    isBurrowed: false,
     hasGivenFirstInput: false,
     deathTime: 0,
 
@@ -173,6 +215,12 @@ export default function App() {
   useEffect(() => {
     let p = 0;
     const interval = setInterval(() => {
+      // If the 3D engine could not start, the loader must not march on to the title
+      // screen behind the failure notice.
+      if (stateRef.current.gameState === 'ERROR') {
+        clearInterval(interval);
+        return;
+      }
       p += Math.floor(Math.random() * 25 + 20);
       if (p >= 100) {
         p = 100;
@@ -257,7 +305,11 @@ export default function App() {
       else if (typeIndex === 4) baseVal = 250;
       else if (typeIndex === 6) baseVal = 180;
 
-      const val = Math.round(baseVal * s.currentDiff.multiplier);
+      // Risk pays. The surge arrives from the seaward end and takes the furthest loot
+      // first, so the further up the shore a piece sits the less time there is to
+      // reach it — and the more it is worth for the trouble.
+      const risk = Math.max(0, Math.min(1, (spawnX - 14) / 30));
+      const val = Math.round(baseVal * s.currentDiff.multiplier * (1 + risk * 1.2));
 
       s.loot3D.push({
         id: Date.now() + i + Math.random(),
@@ -284,14 +336,17 @@ export default function App() {
     s.phaseTimer = 0;
     setIsWaveWarning(false);
 
-    const waveFactor = Math.max(0.65, 1 - s.waveIndex * 0.05);
+    // The window closes all season. The old 0.65 floor was reached at wave seven, so
+    // every wave after it played identically; the floor now sits out past the last
+    // wave and the closing waves are genuinely thin.
+    const waveFactor = Math.max(0.42, 1 - s.waveIndex * 0.045);
     s.phaseDuration = s.currentDiff.baseLowTide * waveFactor;
 
     // King Tide is rolled, not scheduled. Odds climb as the run goes on so late
     // waves feel the most dangerous, it never lands twice in a row, and a pity
     // roll guarantees a long calm stretch still pays off. First eligible on wave 3.
-    // A run only lasts about seven waves before the wrack line runs out, so the
-    // pity window is short: three dry waves and the next one is guaranteed to roll.
+    // A run is thirteen waves, so the pity window has room to work: three dry waves
+    // and the next one is guaranteed to roll.
     const KING_TIDE_FIRST_WAVE = 3;
     const KING_TIDE_PITY_WAVES = 3;
 
@@ -314,6 +369,12 @@ export default function App() {
     }
 
     spawnCycleLoot();
+
+    // Announce the wave you have just walked into. This is progress, not danger — the
+    // water carries the danger now — and it is what gives the season its rungs.
+    setWaveIntro(`WAVE ${s.waveIndex + 1} · ${tierForWave(s.waveIndex + 1)} · ${s.currentDiff.name}`);
+    if (introTimerRef.current !== null) window.clearTimeout(introTimerRef.current);
+    introTimerRef.current = window.setTimeout(() => setWaveIntro(null), 1800);
   }, [spawnCycleLoot]);
 
   const enterWarning = useCallback(() => {
@@ -405,6 +466,10 @@ export default function App() {
     s.isMoving = false;
     s.moveDir = 0;
     s.attached3D = [];
+    s.digging = false;
+    s.digTimer = 0;
+    s.isBurrowed = false;
+    keysRef.current.burrow = false;
 
     setAppState('PLAYING');
     setSelectedDiff(diff);
@@ -419,6 +484,11 @@ export default function App() {
     setWavesSurvived(0);
     setPopups([]);
     setShowInputCue(true);
+    setBurrowed(false);
+    setWaveIntro(null);
+    setPaused(false);
+    pausedRef.current = false;
+    if (introTimerRef.current !== null) window.clearTimeout(introTimerRef.current);
 
     if (engine3dRef.current) {
       for (const item of s.loot3D) {
@@ -455,7 +525,8 @@ export default function App() {
       x: 50,
       y: 45,
       alpha: 1,
-      isGold: isKing
+      isGold: isKing,
+      size: 'big'
     };
     setPopups(prev => [...prev.slice(-3), newPopup]);
 
@@ -496,6 +567,68 @@ export default function App() {
     bankHeldScore();
   }, [bankHeldScore]);
 
+  // Releasing the dig key brings the creature straight back up. There is no emerge
+  // animation: being able to move again immediately is what makes diving a real
+  // choice rather than a trap.
+  const startDig = useCallback(() => {
+    const s = stateRef.current;
+    if (s.gameState !== 'PLAYING') return;
+    initAudio();
+    keysRef.current.burrow = true;
+    setActiveKeys(prev => ({ ...prev, burrow: true }));
+    if (!s.isBurrowed && !s.digging) {
+      s.digging = true;
+      s.digTimer = 0;
+    }
+  }, []);
+
+  const endDig = useCallback(() => {
+    keysRef.current.burrow = false;
+    setActiveKeys(prev => ({ ...prev, burrow: false }));
+  }, []);
+
+  // Pause. Dropping the keys on the way in matters: without it the creature keeps
+  // scuttling under the pause card and comes back somewhere unexpected.
+  const dropKeys = useCallback(() => {
+    keysRef.current.forward = false;
+    keysRef.current.backward = false;
+    keysRef.current.haul = false;
+    keysRef.current.burrow = false;
+    stateRef.current.isHolding = false;
+    setActiveKeys({ forward: false, backward: false, haul: false, burrow: false });
+    stopRumble();
+  }, []);
+
+  const togglePause = useCallback(() => {
+    const s = stateRef.current;
+    if (s.gameState !== 'PLAYING') return;
+    const next = !pausedRef.current;
+    pausedRef.current = next;
+    setPaused(next);
+    if (next) dropKeys();
+  }, [dropKeys]);
+
+  // A phone call or a switched tab is the most common way to lose a run. Pausing on the
+  // way out means coming back does not cost a heart.
+  useEffect(() => {
+    const autoPause = () => {
+      if (stateRef.current.gameState !== 'PLAYING') return;
+      if (pausedRef.current) return;
+      pausedRef.current = true;
+      setPaused(true);
+      dropKeys();
+    };
+    const onVisibility = () => {
+      if (document.hidden) autoPause();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('blur', autoPause);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('blur', autoPause);
+    };
+  }, [dropKeys]);
+
   // Floating popups tick
   useEffect(() => {
     if (popups.length === 0) return;
@@ -527,8 +660,18 @@ export default function App() {
   // Initialize 3D Engine
   useEffect(() => {
     if (container3dRef.current && !engine3dRef.current) {
-      const e3d = new Wrackline3D(container3dRef.current);
-      engine3dRef.current = e3d;
+      // A device with no WebGL throws here. Failing without a word leaves a visitor
+      // staring at a blank blue page with no idea what happened, so the failure has
+      // to become a screen.
+      try {
+        const e3d = new Wrackline3D(container3dRef.current);
+        engine3dRef.current = e3d;
+      } catch (err) {
+        console.error('WRACKLINE could not start the 3D view', err);
+        stateRef.current.gameState = 'ERROR';
+        setWebglFailed(true);
+        setAppState('ERROR');
+      }
     }
     return () => {
       if (engine3dRef.current) {
@@ -565,6 +708,10 @@ export default function App() {
       }
       if (code === 'KeyH' || key === '?' || key === '/') {
         setShowGuide(prev => !prev);
+        return;
+      }
+      if (code === 'Escape' || code === 'KeyP') {
+        togglePause();
         return;
       }
 
@@ -604,6 +751,11 @@ export default function App() {
           endHaul();
           e.preventDefault();
         }
+        // Dig in and hold. Shift is the reflex key, B is the one the guide names.
+        if (code === 'KeyB' || code === 'ShiftLeft' || code === 'ShiftRight') {
+          if (!keysRef.current.burrow) startDig();
+          e.preventDefault();
+        }
       }
     };
 
@@ -621,6 +773,9 @@ export default function App() {
       if (code === 'Space' || code === 'KeyW' || code === 'ArrowUp') {
         endHaul();
       }
+      if (code === 'KeyB' || code === 'ShiftLeft' || code === 'ShiftRight') {
+        endDig();
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
@@ -629,7 +784,7 @@ export default function App() {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [startHaul, endHaul, toggleFullscreen, startGame]);
+  }, [startHaul, endHaul, toggleFullscreen, startGame, startDig, endDig, togglePause]);
 
   // Main 60FPS Game Loop
   useEffect(() => {
@@ -642,12 +797,57 @@ export default function App() {
 
       const s = stateRef.current;
 
-      if (s.gameState === 'PLAYING') {
+      if (s.gameState === 'PLAYING' && !pausedRef.current) {
         s.invulnTimer = Math.max(0, s.invulnTimer - dt);
 
+        // Digging in. Once the shell is under the sand the shell comes up empty: the
+        // haul spills around you, marked so it can never be gathered again, and the
+        // surge takes it as it crosses. That cost is the whole mechanic — without it
+        // diving would just delete the decision the game is built on.
+        if (s.digging && !s.isBurrowed) {
+          if (!keysRef.current.burrow) {
+            // Let go before the shell is under and nothing happened. The wind-up is
+            // what makes a dive a commitment instead of a reflex.
+            s.digging = false;
+            s.digTimer = 0;
+          } else {
+            s.digTimer += dt;
+            if (s.digTimer >= DIG_IN_TIME) {
+              s.digging = false;
+              s.digTimer = 0;
+              s.isBurrowed = true;
+              setBurrowed(true);
+              playWrackCrunch();
+
+              if (s.attached3D.length > 0) {
+                for (const item of s.attached3D) {
+                  item.isAttached = false;
+                  item.doomed = true;
+                  item.x = s.playerX3D + 1.4 + Math.random() * 2.4;
+                  item.z = (Math.random() - 0.5) * 5;
+                }
+                s.attached3D = [];
+                s.held = 0;
+                setHeldScore(0);
+                playSparkle();
+              }
+            }
+          }
+        }
+
+        // Facing the sea again, the creature is back on the surface the instant the
+        // key comes up: no emerge delay, or diving would be a trap rather than a choice.
+        if (!keysRef.current.burrow && s.isBurrowed) {
+          s.isBurrowed = false;
+          setBurrowed(false);
+        }
+
         let moveDir = 0;
-        if (keysRef.current.forward) moveDir += 1;
-        if (keysRef.current.backward) moveDir -= 1;
+        // Buried, or on the way down, you are not going anywhere.
+        if (!s.isBurrowed && !s.digging) {
+          if (keysRef.current.forward) moveDir += 1;
+          if (keysRef.current.backward) moveDir -= 1;
+        }
 
         s.isMoving = moveDir !== 0;
         s.moveDir = moveDir;
@@ -660,12 +860,15 @@ export default function App() {
         }
 
         // Pull loot towards player when hauling
-        const isCurrentlyHolding = s.isHolding || keysRef.current.haul;
+        const isCurrentlyHolding =
+          (s.isHolding || keysRef.current.haul) && !s.isBurrowed && !s.digging;
         if (isCurrentlyHolding) {
           const speed3D = (s.currentDiff.haulSpeed / 1000) * 16.5;
 
           for (const item of s.loot3D) {
-            if (!item.isAttached) {
+            // Spilled loot is on the sand, not in reach: it is gone, and it is meant
+            // to be seen going.
+            if (!item.isAttached && !item.doomed) {
               const pullRate = speed3D + (moveDir > 0 ? 4.5 : 0);
               item.x -= pullRate * dt;
               item.z += (0 - item.z) * Math.min(1, dt * 3.2);
@@ -677,6 +880,19 @@ export default function App() {
                 s.held += item.val;
                 setHeldScore(s.held);
                 playTick();
+
+                // Every grab says what it was worth. The model shapes are the only
+                // other clue and nothing on screen teaches which is which.
+                const grab: FloatingPopup = {
+                  id: Date.now() + Math.random(),
+                  text: `+${item.val}`,
+                  x: 50 + (Math.random() - 0.5) * 12,
+                  y: 55,
+                  alpha: 0.9,
+                  isGold: item.val >= 250,
+                  size: 'small'
+                };
+                setPopups(prev => [...prev.slice(-5), grab]);
               }
             }
           }
@@ -731,6 +947,15 @@ export default function App() {
             }
           }
 
+          // The surge takes whatever you spilled when you dug in.
+          s.loot3D = s.loot3D.filter(i => {
+            if (i.doomed && wave3DX <= i.x) {
+              engine3dRef.current!.scene.remove(i.mesh);
+              return false;
+            }
+            return true;
+          });
+
           if (s.waveX <= 510) enterRetreat();
         } else if (s.cyclePhase === 'WAVE_RETREAT') {
           s.waveX += s.waveSpeed * dt;
@@ -762,9 +987,21 @@ export default function App() {
         }
       }
 
-      if (engine3dRef.current) {
+      if (engine3dRef.current && !pausedRef.current) {
         const wrackRatio = Math.max(0, Math.min(1, (s.wrackLineX - 650) / 130));
         const waveRatio = Math.max(0, Math.min(1, (1400 - s.waveX) / 890));
+
+        // The draw, as a number: the sea falls away through the warning, stays away
+        // through the surge, and climbs back as the wave retreats. With the text
+        // warning gone this is the tell, so it is written large.
+        let drawdown = 0;
+        if (s.cyclePhase === 'WARNING') {
+          drawdown = Math.min(1, s.phaseTimer / Math.max(0.001, s.phaseDuration));
+        } else if (s.cyclePhase === 'WAVE_SWEEP') {
+          drawdown = 1;
+        } else if (s.cyclePhase === 'WAVE_RETREAT') {
+          drawdown = Math.max(0, 1 - (s.waveX - 510) / 890);
+        }
 
         // Update loot meshes
         for (const item of s.loot3D) {
@@ -799,7 +1036,9 @@ export default function App() {
           s.loot3D,
           s.playerX3D,
           s.isMoving,
-          s.moveDir
+          s.moveDir,
+          s.isBurrowed ? 1 : s.digging ? Math.min(1, s.digTimer / DIG_IN_TIME) : 0,
+          drawdown
         );
       }
 
@@ -841,6 +1080,7 @@ export default function App() {
         <button
           onClick={() => setShowGuide(prev => !prev)}
           title="Guide & Controls (H)"
+          aria-label="How to play"
           className="w-10 h-10 md:w-11 md:h-11 rounded-xl bg-[#FDFBF7] hover:bg-[#EAD7B0] border-2 border-[#17181C] shadow-[0_3px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] text-[#17181C] font-bold text-base flex items-center justify-center transition-all cursor-pointer"
         >
           ?
@@ -849,6 +1089,7 @@ export default function App() {
         <button
           onClick={() => handleToggleMute()}
           title="Toggle Audio (M)"
+          aria-label={muted ? 'Turn sound on' : 'Turn sound off'}
           className="w-10 h-10 md:w-11 md:h-11 rounded-xl bg-[#FDFBF7] hover:bg-[#EAD7B0] border-2 border-[#17181C] shadow-[0_3px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] text-[#17181C] text-sm flex items-center justify-center transition-all cursor-pointer"
         >
           {muted ? '🔇' : '🔊'}
@@ -857,6 +1098,7 @@ export default function App() {
         <button
           onClick={toggleFullscreen}
           title="Toggle Fullscreen (F)"
+          aria-label="Toggle fullscreen"
           className="w-10 h-10 md:w-11 md:h-11 rounded-xl bg-[#FDFBF7] hover:bg-[#EAD7B0] border-2 border-[#17181C] shadow-[0_3px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] text-[#17181C] text-base flex items-center justify-center transition-all cursor-pointer"
         >
           ⛶
@@ -872,7 +1114,9 @@ export default function App() {
             top: `${p.y}%`,
             opacity: p.alpha
           }}
-          className={`absolute -translate-x-1/2 -translate-y-1/2 pointer-events-none font-game text-4xl transition-transform ${
+          className={`absolute -translate-x-1/2 -translate-y-1/2 pointer-events-none font-game transition-transform ${
+            p.size === 'small' ? 'text-xl md:text-2xl' : 'text-4xl'
+          } ${
             p.isGold ? 'text-[#F6C445] drop-shadow-[0_2px_0_#17181C]' : 'text-[#17181C] drop-shadow-sm'
           }`}
         >
@@ -889,6 +1133,22 @@ export default function App() {
           <span className="font-game text-xl font-bold text-[#24698F] leading-none">
             {bestScore}
           </span>
+        </div>
+      )}
+
+      {/* 0. NO WEBGL. A device that cannot run the 3D view gets told so in words,
+             instead of a blank blue page and no explanation. */}
+      {appState === 'ERROR' && (
+        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-[#D4E8F8] p-6 text-center">
+          <WracklineLogo size="sm" showTitle={false} className="mb-4" />
+          <h2 className="font-game text-2xl md:text-3xl text-[#17181C] mb-3 tracking-wide">
+            THIS BROWSER CANNOT RUN THE SHORE
+          </h2>
+          <p className="text-xs md:text-sm font-bold text-[#17181C]/75 max-w-sm">
+            {webglFailed
+              ? 'WRACKLINE draws its beach with WebGL, and this browser either does not support it or has it switched off. Another browser, or hardware acceleration turned back on, will do it.'
+              : 'Something stopped the shore from loading. A reload usually fixes it.'}
+          </p>
         </div>
       )}
 
@@ -974,6 +1234,11 @@ export default function App() {
               <span className="font-game text-sm text-[#E25B45]">03</span>
               <span>BANK BEFORE THE SURGE</span>
             </div>
+            <span className="text-[#17181C]/25 hidden sm:inline">|</span>
+            <div className="flex items-center gap-1.5">
+              <span className="font-game text-sm text-[#F6C445]">04</span>
+              <span>DIG IN [B] TO RIDE IT OUT</span>
+            </div>
           </div>
         </div>
       )}
@@ -994,14 +1259,20 @@ export default function App() {
             <span className="font-game text-4xl md:text-5xl font-bold text-[#17181C] tracking-tight leading-none">
               {displayedBanked}
             </span>
-            {/* Hearts: the only way to lose. A wave that catches you holding costs one. */}
-            <div className="flex items-center gap-1 mt-1">
+            {/* Hearts: the only way to lose. A wave that catches you holding costs
+                one. Spent hearts change shape as well as colour — colour on its own
+                left them nearly invisible against the card. */}
+            <div
+              className="flex items-center gap-1 mt-1"
+              role="img"
+              aria-label={`${hearts} of ${selectedDiff.hearts} hearts left`}
+            >
               {Array.from({ length: selectedDiff.hearts }).map((_, i) => (
                 <span
                   key={i}
-                  className={`text-base leading-none ${i < hearts ? 'text-[#E25B45]' : 'text-[#17181C]/20'}`}
+                  className={`text-base leading-none ${i < hearts ? 'text-[#E25B45]' : 'text-[#17181C]/45'}`}
                 >
-                  ♥
+                  {i < hearts ? '♥' : '♡'}
                 </span>
               ))}
             </div>
@@ -1023,7 +1294,8 @@ export default function App() {
                 WAVE
               </span>
               <span className="font-game text-xl md:text-2xl font-bold text-[#E8A317] leading-none">
-                {wavesSurvived + 1}
+                {Math.min(wavesSurvived + 1, SEASON_WAVES)}
+                <span className="text-[#17181C]/40 text-sm md:text-base">/{SEASON_WAVES}</span>
               </span>
             </div>
           </div>
@@ -1035,17 +1307,32 @@ export default function App() {
             </div>
           )}
 
-          {/* Wave Warning Banner */}
+          {/* The draw. "WAVE INCOMING!" is gone: the sea pulling back is the warning
+              now, and this rim is what makes it impossible to miss on a small screen. */}
           {isWaveWarning && (
-            <div className="absolute top-32 md:top-20 left-1/2 -translate-x-1/2 z-30 pointer-events-none font-game bg-[#E25B45] border-2 border-[#17181C] text-white text-base md:text-xl px-5 md:px-7 py-2 rounded-xl shadow-[0_4px_0_#17181C] tracking-widest animate-pulse max-w-[92vw] text-center">
-              WAVE INCOMING!
+            <div className="absolute inset-0 z-20 pointer-events-none animate-pulse border-4 border-[#E25B45]/45 shadow-[inset_0_0_90px_26px_rgba(23,24,28,0.45)]" />
+          )}
+
+          {/* King Tide Banner. It now shows through the draw as well, so a doubling
+              wave is announced before it lands and not only between waves. */}
+          {isKingTide && (
+            <div className="absolute top-32 md:top-20 left-1/2 -translate-x-1/2 z-30 pointer-events-none font-game bg-[#F6C445] border-2 border-[#17181C] text-[#17181C] text-base md:text-xl px-5 md:px-7 py-2 rounded-xl shadow-[0_4px_0_#17181C] tracking-widest animate-pulse max-w-[92vw] text-center">
+              KING TIDE · 2X
             </div>
           )}
 
-          {/* King Tide Banner */}
-          {isKingTide && !isWaveWarning && (
-            <div className="absolute top-32 md:top-20 left-1/2 -translate-x-1/2 z-30 pointer-events-none font-game bg-[#F6C445] border-2 border-[#17181C] text-[#17181C] text-base md:text-xl px-5 md:px-7 py-2 rounded-xl shadow-[0_4px_0_#17181C] tracking-widest animate-pulse max-w-[92vw] text-center">
-              KING TIDE · 2X
+          {/* Which wave you just walked into. Progress, not danger, so it never
+              competes with the King Tide call. */}
+          {waveIntro && !isKingTide && (
+            <div className="absolute top-24 md:top-16 left-1/2 -translate-x-1/2 z-30 pointer-events-none font-game bg-[#FDFBF7] border-2 border-[#17181C] text-[#17181C] text-xs md:text-base px-3.5 md:px-6 py-1.5 rounded-xl shadow-[0_4px_0_#17181C] tracking-widest max-w-[92vw] text-center">
+              {waveIntro}
+            </div>
+          )}
+
+          {/* Held under the sand: the claws are empty and the surge is going over. */}
+          {burrowed && (
+            <div className="absolute top-[58%] left-1/2 -translate-x-1/2 z-30 pointer-events-none bg-[#F6C445] border-2 border-[#17181C] px-4 py-1.5 rounded-xl shadow-[0_4px_0_#17181C] font-game text-xs md:text-sm tracking-widest text-[#17181C] uppercase">
+              Dug in · safe, and empty clawed
             </div>
           )}
 
@@ -1059,7 +1346,11 @@ export default function App() {
           )}
 
           {/* Low-Poly Tactile 3D On-Screen Controls */}
-          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-4">
+          {/* w-max matters. An absolutely positioned row with only `left` set is sized
+              against the space left of it, which on a phone is about half the screen —
+              wrap onto that and the four controls stack into three rows. w-max sizes
+              the row to its contents, and the -translate centres it. */}
+          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex w-max items-center justify-center gap-2 md:gap-4">
             <button
               // Pointer events with capture: on a phone the finger often slides off the
               // button mid-hold, and capture keeps the key held until it is released.
@@ -1083,6 +1374,7 @@ export default function App() {
                   : 'bg-[#FDFBF7] text-[#17181C] hover:bg-[#EAD7B0] shadow-[0_4px_0_#17181C]'
               }`}
               title="Move Left (A / Left Arrow)"
+              aria-label="Move down the shore (A or Left Arrow)"
             >
               ◀
             </button>
@@ -1102,7 +1394,8 @@ export default function App() {
                 e.preventDefault();
                 endHaul();
               }}
-              className={`px-9 h-14 rounded-xl border-2 border-[#17181C] font-game text-lg tracking-widest flex items-center gap-2 transition-all cursor-pointer ${
+              aria-label="Hold to haul loot in, release to bank it (Space)"
+              className={`px-5 md:px-9 h-14 rounded-xl border-2 border-[#17181C] font-game text-lg tracking-widest flex items-center gap-2 transition-all cursor-pointer ${
                 activeKeys.haul
                   ? 'bg-[#F6C445] text-[#17181C] translate-y-[2px] shadow-[0_1px_0_#17181C]'
                   : 'bg-[#17181C] text-white hover:bg-[#24698F] shadow-[0_5px_0_#0D0E10]'
@@ -1133,10 +1426,57 @@ export default function App() {
                   : 'bg-[#FDFBF7] text-[#17181C] hover:bg-[#EAD7B0] shadow-[0_4px_0_#17181C]'
               }`}
               title="Move Right (D / Right Arrow)"
+              aria-label="Move up the shore (D or Right Arrow)"
             >
               ▶
             </button>
+
+            <button
+              // Hold to dig in. Capture again, so a thumb sliding off does not pop the
+              // creature face-first out of the sand mid-surge.
+              onPointerDown={e => {
+                e.preventDefault();
+                e.currentTarget.setPointerCapture(e.pointerId);
+                startDig();
+              }}
+              onPointerUp={endDig}
+              onPointerCancel={endDig}
+              title="Dig In (B / Shift)"
+              aria-label="Hold to dig into the sand and ride out the surge (B or Shift)"
+              className={`px-3 h-14 rounded-xl border-2 border-[#17181C] font-game text-base tracking-widest flex items-center gap-1 transition-all cursor-pointer ${
+                activeKeys.burrow || burrowed
+                  ? 'bg-[#F6C445] text-[#17181C] translate-y-[2px] shadow-[0_1px_0_#17181C]'
+                  : 'bg-[#FDFBF7] text-[#17181C] hover:bg-[#EAD7B0] shadow-[0_4px_0_#17181C]'
+              }`}
+            >
+              <span>▼</span>
+              <span>DIG</span>
+            </button>
           </div>
+
+          {/* Pause. The game pauses itself when the tab goes away, so this card is
+              mostly reached for deliberately — to answer a message mid-run. */}
+          {paused && (
+            <div className="absolute inset-0 z-40 bg-[#D4E6F4]/75 backdrop-blur-[2px] flex flex-col items-center justify-center pointer-events-auto">
+              <span className="font-game text-4xl md:text-5xl text-[#17181C] tracking-widest mb-2">
+                PAUSED
+              </span>
+              <span className="text-[10px] md:text-xs font-black text-[#17181C]/60 uppercase tracking-widest mb-6 text-center px-6">
+                the tide is holding its breath · wave {Math.min(wavesSurvived + 1, SEASON_WAVES)} of{' '}
+                {SEASON_WAVES}
+              </span>
+              <button
+                onClick={togglePause}
+                aria-label="Resume playing"
+                className="px-8 py-3.5 rounded-2xl bg-[#17181C] hover:bg-[#24698F] text-[#FFFDF8] font-game text-xl tracking-wider border-2 border-[#17181C] shadow-[0_5px_0_#0D0E10] active:translate-y-[2px] active:shadow-[0_1px_0_#0D0E10] transition-all cursor-pointer"
+              >
+                RESUME
+              </button>
+              <span className="mt-5 text-[10px] font-black text-[#17181C]/45 uppercase tracking-widest text-center px-6">
+                ESC or P to pause · switching tabs pauses for you
+              </span>
+            </div>
+          )}
         </>
       )}
 
@@ -1147,7 +1487,10 @@ export default function App() {
           onClick={() => setShowGuide(false)}
         >
           <div
-            className="bg-[#FDFBF7] border-3 border-[#17181C] rounded-3xl max-w-sm w-full p-6 shadow-[0_8px_0_#17181C] relative"
+            // Capped to the viewport and scrollable inside: the guide now carries a
+            // card for digging in and a price list, and on a phone it grew past the
+            // screen — clipping the first card and putting GOT IT out of reach.
+            className="bg-[#FDFBF7] border-3 border-[#17181C] rounded-3xl max-w-sm w-full max-h-[92dvh] overflow-y-auto overscroll-contain p-6 shadow-[0_8px_0_#17181C] relative"
             onClick={e => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-5">
@@ -1197,28 +1540,75 @@ export default function App() {
                 <div>
                   <span className="font-game text-sm text-[#17181C] block">DON&apos;T GET CAUGHT HOLDING</span>
                   <span className="text-xs text-[#17181C]/85 font-bold">
-                    A wave that hits you while you still hold loot costs a heart ♥. Bank first, or
-                    wade through with empty claws.
+                    A surge that hits you while you still hold loot costs a heart ♥. Bank first, wade
+                    through with empty claws, or dig in and lose the haul.
                   </span>
                 </div>
               </div>
 
               <div className="bg-[#EAD7B0]/30 p-3 rounded-xl border-2 border-[#17181C]/20 flex items-start gap-3">
-                <span className="font-game text-xl text-[#24698F]">05</span>
+                <span className="font-game text-xl text-[#F6C445]">05</span>
+                <div>
+                  <span className="font-game text-sm text-[#17181C] block">DIG IN</span>
+                  <span className="text-xs text-[#17181C]/85 font-bold">
+                    Hold [B] or [SHIFT], or hold the DIG button, to bury yourself. The surge rolls
+                    over you and costs nothing — but everything in your claws spills onto the sand
+                    and the water takes it. You cannot move or haul while you are under.
+                  </span>
+                </div>
+              </div>
+
+              <div className="bg-[#EAD7B0]/30 p-3 rounded-xl border-2 border-[#17181C]/20 flex items-start gap-3">
+                <span className="font-game text-xl text-[#24698F]">06</span>
                 <div>
                   <span className="font-game text-sm text-[#17181C] block">OUTLAST THE SEASON</span>
                   <span className="text-xs text-[#17181C]/85 font-bold">
-                    Survive all {SEASON_WAVES} waves to win. Lose your last heart and the surge takes
-                    you.
+                    Survive all {SEASON_WAVES} waves, from the Shallows to the Season&apos;s End. The
+                    calm between surges keeps shrinking as you go. Lose your last heart and the
+                    surge takes you.
                   </span>
                 </div>
+              </div>
+
+              {/* What the shore is worth. Nothing else teaches this, and the model
+                  shapes are the only other clue you get. */}
+              <div className="bg-[#EAD7B0]/30 p-3 rounded-xl border-2 border-[#17181C]/20">
+                <span className="font-game text-sm text-[#17181C] block mb-1.5">
+                  WHAT&apos;S WORTH WHAT
+                </span>
+                <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] font-bold text-[#17181C]/85">
+                  <span>
+                    AMMONITE <b className="text-[#24698F]">320</b>
+                  </span>
+                  <span>
+                    CLAM <b className="text-[#24698F]">250</b>
+                  </span>
+                  <span>
+                    BOTTLE <b className="text-[#24698F]">180</b>
+                  </span>
+                  <span>
+                    SEA GLASS <b className="text-[#24698F]">140</b>
+                  </span>
+                  <span>
+                    DOUBLOON <b className="text-[#24698F]">120</b>
+                  </span>
+                  <span>
+                    DRIFTWOOD <b className="text-[#24698F]">80</b>
+                  </span>
+                </div>
+                <span className="text-[11px] font-bold text-[#17181C]/70 block mt-1.5">
+                  Base values — your tide multiplies them, and the further up the shore you pull a
+                  piece from, the more it pays.
+                </span>
               </div>
             </div>
 
             {/* Low-Poly Action Button */}
             <button
               onClick={() => setShowGuide(false)}
-              className="w-full py-3 rounded-xl bg-[#24698F] hover:bg-[#1B5575] text-white font-game text-base tracking-wider border-2 border-[#17181C] shadow-[0_4px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] transition-all cursor-pointer"
+              // Sticky, because the guide scrolls on a phone and the way out should
+              // never be something you have to hunt for.
+              className="sticky bottom-0 w-full py-3 rounded-xl bg-[#24698F] hover:bg-[#1B5575] text-white font-game text-base tracking-wider border-2 border-[#17181C] shadow-[0_4px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] transition-all cursor-pointer"
             >
               GOT IT
             </button>
