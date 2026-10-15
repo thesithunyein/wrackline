@@ -14,7 +14,7 @@ import {
   toggleMute,
   getIsMuted
 } from './audio';
-import { Wrackline3D, Loot3DItem } from './game3d';
+import { Wrackline3D, Loot3DItem, groundHeightAt } from './game3d';
 import { WracklineLogo } from './Logo';
 
 interface DiffConfig {
@@ -223,7 +223,7 @@ export default function App() {
 
       const spawnX = 14 + Math.random() * 18 + i * 2.2;
       const spawnZ = (Math.random() - 0.5) * 11;
-      const groundY = 0.25 - spawnX * 0.08;
+      const groundY = groundHeightAt(spawnX, spawnZ) + 0.3;
 
       mesh.position.set(spawnX, groundY, spawnZ);
       engine3dRef.current.scene.add(mesh);
@@ -669,7 +669,7 @@ export default function App() {
         for (const item of s.loot3D) {
           if (item.isAttached) {
             const blobR3D = (s.playerRadius / 18) * 1.25;
-            const slopeY = -s.playerX3D * 0.11;
+            const slopeY = groundHeightAt(s.playerX3D, 0);
             item.mesh.position.set(
               s.playerX3D + Math.cos(item.attachAngle) * blobR3D,
               slopeY + 1.0 + Math.sin(item.attachAngle) * blobR3D * 0.6,
@@ -677,7 +677,9 @@ export default function App() {
             );
             item.mesh.rotation.y += dt * 1.5;
           } else {
-            item.mesh.position.set(item.x, 0.25 - item.x * 0.08, item.z);
+            // Bedded on the sand the item is sitting on, so loot stays visible on
+            // the slope instead of sinking into it or hovering over it.
+            item.mesh.position.set(item.x, groundHeightAt(item.x, item.z) + 0.3, item.z);
             if (s.isHolding || keysRef.current.forward) {
               item.mesh.rotation.y += dt * 3.0;
             }
@@ -733,11 +735,11 @@ export default function App() {
       />
 
       {/* Top Header Controls: Low-Poly Tactile 3D Buttons */}
-      <div className="absolute top-5 right-5 z-40 flex items-center gap-3">
+      <div className="absolute top-4 right-4 md:top-5 md:right-5 z-40 flex items-center gap-2 md:gap-3">
         <button
           onClick={() => setShowGuide(prev => !prev)}
           title="Guide & Controls (H)"
-          className="w-11 h-11 rounded-xl bg-[#FDFBF7] hover:bg-[#EAD7B0] border-2 border-[#17181C] shadow-[0_3px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] text-[#17181C] font-bold text-base flex items-center justify-center transition-all cursor-pointer"
+          className="w-10 h-10 md:w-11 md:h-11 rounded-xl bg-[#FDFBF7] hover:bg-[#EAD7B0] border-2 border-[#17181C] shadow-[0_3px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] text-[#17181C] font-bold text-base flex items-center justify-center transition-all cursor-pointer"
         >
           ?
         </button>
@@ -745,7 +747,7 @@ export default function App() {
         <button
           onClick={() => handleToggleMute()}
           title="Toggle Audio (M)"
-          className="w-11 h-11 rounded-xl bg-[#FDFBF7] hover:bg-[#EAD7B0] border-2 border-[#17181C] shadow-[0_3px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] text-[#17181C] text-sm flex items-center justify-center transition-all cursor-pointer"
+          className="w-10 h-10 md:w-11 md:h-11 rounded-xl bg-[#FDFBF7] hover:bg-[#EAD7B0] border-2 border-[#17181C] shadow-[0_3px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] text-[#17181C] text-sm flex items-center justify-center transition-all cursor-pointer"
         >
           {muted ? '🔇' : '🔊'}
         </button>
@@ -753,7 +755,7 @@ export default function App() {
         <button
           onClick={toggleFullscreen}
           title="Toggle Fullscreen (F)"
-          className="w-11 h-11 rounded-xl bg-[#FDFBF7] hover:bg-[#EAD7B0] border-2 border-[#17181C] shadow-[0_3px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] text-[#17181C] text-base flex items-center justify-center transition-all cursor-pointer"
+          className="w-10 h-10 md:w-11 md:h-11 rounded-xl bg-[#FDFBF7] hover:bg-[#EAD7B0] border-2 border-[#17181C] shadow-[0_3px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] text-[#17181C] text-base flex items-center justify-center transition-all cursor-pointer"
         >
           ⛶
         </button>
@@ -806,11 +808,11 @@ export default function App() {
 
       {/* 2. TITLE SCREEN: Spacious, Uncluttered Low-Poly 3D Art Menu */}
       {appState === 'TITLE' && (
-        <div className="absolute inset-0 flex flex-col justify-between items-center z-40 bg-gradient-to-b from-[#D4E6F4]/25 via-transparent to-[#D4E6F4]/35 pointer-events-auto px-6 py-8 md:py-12 select-none">
+        <div className="absolute inset-0 flex flex-col justify-between items-center z-40 bg-gradient-to-b from-[#D4E6F4]/25 via-transparent to-[#D4E6F4]/35 pointer-events-auto px-6 pt-7 pb-10 md:pt-9 md:pb-14 select-none">
           {/* Top Zone: Clean Title & Subtitle with plenty of air */}
-          <div className="flex flex-col items-center mt-2 md:mt-4 pointer-events-none">
-            <WracklineLogo size="md" className="mb-2" />
-            <p className="font-game text-xs md:text-sm text-[#17181C]/75 tracking-widest uppercase">
+          <div className="flex flex-col items-center mt-1 md:mt-2 pointer-events-none">
+            <WracklineLogo size="md" className="mb-3 md:mb-4" />
+            <p className="font-game text-xs md:text-sm text-[#17181C]/75 tracking-widest uppercase leading-relaxed">
               SURVIVE THE TIDE · HARVEST THE SHORE
             </p>
           </div>
@@ -820,18 +822,18 @@ export default function App() {
             {/* Primary Action Button: Clear, Big, Unmistakable Breathing Room */}
             <button
               onClick={() => startGame(selectedDiff)}
-              className="w-full py-4 md:py-5 rounded-2xl bg-[#17181C] hover:bg-[#24698F] text-[#FFFDF8] font-game text-2xl md:text-3xl tracking-widest border-2 border-[#17181C] shadow-[0_6px_0_#0D0E10] hover:shadow-[0_8px_0_#0D0E10] active:translate-y-[3px] active:shadow-[0_2px_0_#0D0E10] transition-all cursor-pointer flex items-center justify-center gap-3 mb-6"
+              className="w-full py-4 md:py-5 rounded-2xl bg-[#17181C] hover:bg-[#24698F] text-[#FFFDF8] font-game text-2xl md:text-3xl tracking-widest border-2 border-[#17181C] shadow-[0_6px_0_#0D0E10] hover:shadow-[0_8px_0_#0D0E10] active:translate-y-[3px] active:shadow-[0_2px_0_#0D0E10] transition-all cursor-pointer flex items-center justify-center gap-3 mb-7 md:mb-9"
             >
               <span>▶</span>
               <span>PLAY</span>
             </button>
 
             {/* Tide Intensity / Difficulty (Clearly Separated & Labeled) */}
-            <div className="flex flex-col items-center w-full bg-[#FDFBF7]/90 backdrop-blur-xs p-2.5 rounded-2xl border-2 border-[#17181C] shadow-[0_4px_0_#17181C]">
-              <span className="text-[10px] font-black text-[#17181C]/60 uppercase tracking-widest mb-1.5">
+            <div className="flex flex-col items-center w-full bg-[#FDFBF7]/90 backdrop-blur-xs p-3 md:p-3.5 rounded-2xl border-2 border-[#17181C] shadow-[0_4px_0_#17181C]">
+              <span className="text-[10px] font-black text-[#17181C]/60 uppercase tracking-widest mb-2.5">
                 TIDE INTENSITY
               </span>
-              <div className="grid grid-cols-3 gap-2 w-full">
+              <div className="grid grid-cols-3 gap-2 md:gap-2.5 w-full">
                 {(['CALM', 'SURF', 'STORM'] as const).map(key => {
                   const d = DIFFS[key];
                   const isSelected = selectedDiff.name === key;
@@ -839,14 +841,14 @@ export default function App() {
                     <button
                       key={key}
                       onClick={() => setSelectedDiff(d)}
-                      className={`py-2 px-1 rounded-xl font-game text-sm tracking-wider transition-all cursor-pointer flex flex-col items-center justify-center border-2 border-[#17181C] ${
+                      className={`py-2.5 px-2 rounded-xl font-game text-sm tracking-wider transition-all cursor-pointer flex flex-col items-center justify-center border-2 border-[#17181C] ${
                         isSelected
                           ? 'bg-[#24698F] text-white shadow-[0_3px_0_#10364C] translate-y-[-2px]'
                           : 'bg-white text-[#17181C]/75 hover:bg-[#EAD7B0]/60 shadow-[0_2px_0_#17181C]'
                       }`}
                     >
                       <span>{d.name}</span>
-                      <span className="text-[10px] font-ui font-bold opacity-80">{d.mult}</span>
+                      <span className="text-[10px] font-ui font-bold opacity-80 mt-0.5 leading-none">{d.mult}</span>
                     </button>
                   );
                 })}
@@ -855,7 +857,7 @@ export default function App() {
           </div>
 
           {/* Bottom Zone: 3-Step Instant Guide - Immediately Explains What Game Is For */}
-          <div className="flex flex-wrap items-center justify-center gap-3 md:gap-6 bg-[#FDFBF7]/90 backdrop-blur-xs border-2 border-[#17181C] px-5 py-2.5 rounded-2xl shadow-[0_4px_0_#17181C] text-xs font-bold text-[#17181C]">
+          <div className="flex flex-wrap items-center justify-center gap-4 md:gap-7 bg-[#FDFBF7]/90 backdrop-blur-xs border-2 border-[#17181C] px-6 py-3 rounded-2xl shadow-[0_4px_0_#17181C] text-xs font-bold text-[#17181C] mb-1 md:mb-2">
             <div className="flex items-center gap-1.5">
               <span className="font-game text-sm text-[#24698F]">01</span>
               <span>SCUTTLE [A / D]</span>
@@ -878,7 +880,7 @@ export default function App() {
       {appState === 'PLAYING' && (
         <>
           {/* Low-Poly Score Card (Top Left) */}
-          <div className="absolute top-6 left-8 pointer-events-none flex flex-col bg-[#FDFBF7]/95 border-2 border-[#17181C] rounded-2xl p-3 shadow-[0_4px_0_#17181C]">
+          <div className="absolute top-6 left-8 pointer-events-none flex flex-col gap-0.5 bg-[#FDFBF7]/95 border-2 border-[#17181C] rounded-2xl p-3.5 shadow-[0_4px_0_#17181C]">
             <span className="text-[10px] font-black text-[#17181C]/60 uppercase tracking-widest">
               SCORE
             </span>
@@ -888,8 +890,8 @@ export default function App() {
           </div>
 
           {/* Low-Poly Best & Wave Pill (Top Center-Right) */}
-          <div className="absolute top-6 right-44 pointer-events-none hidden md:flex items-center gap-3">
-            <div className="bg-[#FDFBF7]/95 border-2 border-[#17181C] rounded-2xl px-4 py-2.5 shadow-[0_4px_0_#17181C] flex flex-col items-end">
+          <div className="absolute top-24 right-4 md:top-6 md:right-48 pointer-events-none flex items-center gap-2 md:gap-3">
+            <div className="bg-[#FDFBF7]/95 border-2 border-[#17181C] rounded-2xl px-4 py-2.5 shadow-[0_4px_0_#17181C] flex flex-col items-end gap-0.5">
               <span className="text-[10px] font-black text-[#17181C]/60 uppercase tracking-widest">
                 BEST
               </span>
@@ -898,7 +900,7 @@ export default function App() {
               </span>
             </div>
 
-            <div className="bg-[#FDFBF7]/95 border-2 border-[#17181C] rounded-2xl px-3.5 py-2.5 shadow-[0_4px_0_#17181C] flex flex-col items-center">
+            <div className="bg-[#FDFBF7]/95 border-2 border-[#17181C] rounded-2xl px-3.5 py-2.5 shadow-[0_4px_0_#17181C] flex flex-col items-center gap-0.5">
               <span className="text-[10px] font-black text-[#17181C]/60 uppercase tracking-widest">
                 WAVE
               </span>
@@ -931,7 +933,7 @@ export default function App() {
 
           {/* Short Real Game Input Prompt */}
           {showInputCue && (
-            <div className="absolute bottom-28 left-1/2 -translate-x-1/2 pointer-events-none bg-[#FDFBF7]/95 border-2 border-[#17181C] px-6 py-2 rounded-xl shadow-[0_3px_0_#17181C]">
+            <div className="absolute bottom-28 left-1/2 -translate-x-1/2 pointer-events-none bg-[#FDFBF7]/95 border-2 border-[#17181C] px-6 py-2.5 rounded-xl shadow-[0_3px_0_#17181C]">
               <span className="font-game text-sm text-[#17181C] tracking-wider uppercase">
                 HOLD [SPACE] TO HAUL
               </span>
@@ -1098,20 +1100,20 @@ export default function App() {
 
       {/* 5. LOW-POLY GAME OVER SCREEN */}
       {appState === 'DEAD' && (
-        <div className="absolute inset-0 bg-[#D4E6F4]/92 backdrop-blur-sm flex flex-col items-center justify-center z-50 pointer-events-auto p-4">
-          <WracklineLogo size="sm" showTitle={false} className="mb-2" />
+        <div className="absolute inset-0 bg-[#D4E6F4]/92 backdrop-blur-sm flex flex-col items-center justify-center z-50 pointer-events-auto p-5 md:p-6">
+          <WracklineLogo size="sm" showTitle={false} className="mb-3 md:mb-4" />
 
           {/* Short Game Title */}
-          <h2 className="font-game text-4xl md:text-5xl text-[#17181C] tracking-wide mb-6">
+          <h2 className="font-game text-4xl md:text-5xl text-[#17181C] tracking-wide mb-6 md:mb-8">
             HIGH TIDE
           </h2>
 
           {/* Low-Poly Faceted Scorecard */}
-          <div className="bg-[#FDFBF7] border-3 border-[#17181C] rounded-3xl p-6 shadow-[0_8px_0_#17181C] w-76 flex flex-col items-center mb-6">
-            <span className="text-xs font-black text-[#17181C]/60 uppercase tracking-widest mb-1">
+          <div className="bg-[#FDFBF7] border-3 border-[#17181C] rounded-3xl shadow-[0_8px_0_#17181C] w-76 flex flex-col items-center p-6 md:p-7 mb-7 md:mb-9">
+            <span className="text-xs font-black text-[#17181C]/60 uppercase tracking-widest mb-2">
               FINAL SCORE
             </span>
-            <span className="font-game text-6xl text-[#24698F] mb-2">{bankedScore}</span>
+            <span className="font-game text-6xl text-[#24698F] mb-3">{bankedScore}</span>
 
             {isNewBest && (
               <span className="font-game text-xs tracking-widest text-[#17181C] bg-[#F6C445] border-2 border-[#17181C] px-3.5 py-1 rounded-lg shadow-[0_2px_0_#17181C] mb-3">
@@ -1119,7 +1121,7 @@ export default function App() {
               </span>
             )}
 
-            <div className="w-full pt-3 border-t-2 border-[#17181C]/15 flex justify-between text-xs font-bold text-[#17181C]/75">
+            <div className="w-full pt-4 border-t-2 border-[#17181C]/15 flex justify-between gap-4 text-xs font-bold text-[#17181C]/75">
               <span>BEST: {bestScore}</span>
               <span>
                 WAVES: {wavesSurvived}
@@ -1128,7 +1130,7 @@ export default function App() {
           </div>
 
           {/* Low-Poly Tactile Action Buttons */}
-          <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center justify-center gap-3 md:gap-5">
             <button
               onClick={() => startGame(selectedDiff)}
               className="px-8 py-3.5 rounded-2xl bg-[#17181C] hover:bg-[#24698F] text-[#FFFDF8] font-game text-xl tracking-wider border-2 border-[#17181C] shadow-[0_5px_0_#0D0E10] active:translate-y-[2px] active:shadow-[0_1px_0_#0D0E10] transition-all cursor-pointer"

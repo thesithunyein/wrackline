@@ -69,6 +69,70 @@ function createLowPolyShadowTexture(): THREE.CanvasTexture {
   return new THREE.CanvasTexture(canvas);
 }
 
+// ---------------------------------------------------------------------------
+// Shared terrain sampler.
+// Props sample this so they bed into the sand they are actually standing on
+// rather than floating above it or sinking through it. It must mirror
+// buildLowPolyTerrain() exactly: the dune mesh is offset by (6, -0.6, 0).
+// ---------------------------------------------------------------------------
+export const DUNE_OFFSET_X = 6;
+export const DUNE_OFFSET_Y = -0.6;
+
+export function duneHeight(x: number, z: number): number {
+  const lx = x - DUNE_OFFSET_X;
+  const duneSlope = -lx * 0.11;
+  const bigMounds = Math.sin(lx * 0.22 + z * 0.14) * 0.72 + Math.cos(z * 0.24) * 0.48;
+  const terrace = Math.floor((duneSlope + bigMounds) * 2.2) * 0.12;
+  return DUNE_OFFSET_Y + duneSlope + bigMounds + terrace;
+}
+
+// Wet shoreline strip. Mirrors the wetSandMesh placed at (22, -2.15, 0).
+export function shoreHeight(x: number, z: number): number {
+  const lx = x - 22;
+  return -2.15 + -lx * 0.11 + Math.sin(lx * 0.35 + z * 0.2) * 0.2;
+}
+
+// Ground under a prop: whichever of the two overlapping surfaces is on top.
+export function groundHeightAt(x: number, z: number): number {
+  return Math.max(duneHeight(x, z), shoreHeight(x, z));
+}
+
+// ---------------------------------------------------------------------------
+// Breaker geometry, expressed in the wave group's own local frame. Local +X
+// points out to sea and local X = 0 is the leading toe of the wave. Every
+// surface is rebuilt each frame (see update()) so the surge can be draped onto
+// whatever beach it happens to be crossing.
+// ---------------------------------------------------------------------------
+export const SEA_SURFACE_Y = -2.2; // matches the sea mesh position
+const WAVE_HEIGHT = 1.55;
+const WAVE_PEAK_X = 2.0;
+const WAVE_DEPTH = 40; // long-shore span of the breaker
+const WAVE_SWELL_X0 = -6; // toe of the face
+const WAVE_SWELL_X1 = 22; // tail, out in the open sea
+const WAVE_LIP_X0 = -2.2; // whitewater over the upper face and crest
+const WAVE_LIP_X1 = 3.4;
+const WAVE_SHEET_X0 = -4; // inland end, buried under the sand
+const WAVE_SHEET_X1 = 8; // seaward end, hidden under the swell body
+
+// The surface a wave has to sit on: the sand it is running over, or sea level
+// wherever the beach has already dropped below the waterline. Draping the
+// breaker on this is what keeps it attached to the rest of the sea instead of
+// leaving it standing on dry sand with a gap behind it.
+export function waterSurfaceY(x: number, z: number): number {
+  return Math.max(groundHeightAt(x, z) + 0.07, SEA_SURFACE_Y);
+}
+
+// Asymmetric shoaling profile: a short steep face shoreward of the crest, then a
+// long swell easing back down to the open sea behind it.
+function waveProfile(lx: number, peak: number, height: number): number {
+  if (lx <= peak) {
+    const t = Math.max(0, Math.min(1, (lx - WAVE_SWELL_X0) / (peak - WAVE_SWELL_X0)));
+    return height * Math.pow(Math.sin(t * Math.PI * 0.5), 0.8);
+  }
+  const t = Math.max(0, Math.min(1, (lx - peak) / (WAVE_SWELL_X1 - peak)));
+  return height * Math.pow(1 - t, 1.8);
+}
+
 export class Wrackline3D {
   container: HTMLElement;
   scene: THREE.Scene;
@@ -95,15 +159,29 @@ export class Wrackline3D {
   rockGroup!: THREE.Group;
   grassGroup!: THREE.Group;
   wrackGroup!: THREE.Group;
+  sunCorona!: THREE.Mesh;
+  sunCoronaMat!: THREE.MeshBasicMaterial;
+
+  // Living-scenery registries
+  wrackItems: { mesh: THREE.Object3D; x: number; z: number; lift: number }[] = [];
+  swayTrees: THREE.Object3D[] = [];
+  swayGrass: THREE.Object3D[] = [];
+  cloudDrift: THREE.Object3D[] = [];
   cloudsGroup!: THREE.Group;
   sunGroup!: THREE.Group;
   skyDome!: THREE.Mesh;
 
-  // Low-Poly Wave Breaker Surge
+  // Low-Poly Wave Breaker Surge (swell body, breaking lip, water sheet, whitewater)
   waveGroup: THREE.Group;
   waveSwellMesh!: THREE.Mesh;
-  waveCrestMesh!: THREE.Mesh;
-  waveFoamMesh!: THREE.Mesh;
+  waveSwellGeo!: THREE.BufferGeometry;
+  swellInitialPositions!: Float32Array;
+  waveLipMesh!: THREE.Mesh;
+  waveLipGeo!: THREE.BufferGeometry;
+  lipInitialPositions!: Float32Array;
+  waveSheetMesh!: THREE.Mesh;
+  waveSheetGeo!: THREE.BufferGeometry;
+  sheetInitialPositions!: Float32Array;
 
   // Low-Poly Hero Scavenger Creature (Faceted Hermit Scuttler)
   blobGroup: THREE.Group;
@@ -155,7 +233,13 @@ export class Wrackline3D {
   seaMat: THREE.MeshStandardMaterial;
   waveSwellMat: THREE.MeshStandardMaterial;
   waveFoamMat: THREE.MeshStandardMaterial;
+  waveSheetMat: THREE.MeshStandardMaterial;
   woodMat: THREE.MeshStandardMaterial;
+  driftwoodMat: THREE.MeshStandardMaterial;
+  kelpMat: THREE.MeshStandardMaterial;
+  kelpBulbMat: THREE.MeshStandardMaterial;
+  shellMat: THREE.MeshStandardMaterial;
+  crabMat: THREE.MeshStandardMaterial;
   leafMat: THREE.MeshStandardMaterial;
   rockMat: THREE.MeshStandardMaterial;
   goldMat: THREE.MeshStandardMaterial;
@@ -167,7 +251,9 @@ export class Wrackline3D {
     // 1. Scene Setup
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0xBDE0F5);
-    this.scene.fog = new THREE.FogExp2(0xBDE0F5, 0.009);
+    // Lighter haze than the old 0.009: that density greyed the whole shore out,
+    // so the beach went pale and featureless as the player walked up it.
+    this.scene.fog = new THREE.FogExp2(0xC6E2F4, 0.0048);
 
     // 2. Camera Setup
     const aspect = container.clientWidth / container.clientHeight;
@@ -187,7 +273,9 @@ export class Wrackline3D {
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.05;
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // PCFSoftShadowMap was removed in this version of three, and asking for it
+    // only logged a warning while falling back to PCFShadowMap anyway.
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
 
     container.appendChild(this.renderer.domElement);
 
@@ -225,13 +313,12 @@ export class Wrackline3D {
       opacity: 0.94
     });
 
+    // Body water: opaque, so it always covers the shallow sheet it sits in.
     this.waveSwellMat = new THREE.MeshStandardMaterial({
-      color: 0x1674A3,
+      color: 0x1A85B6, // same family as the sea, so the surge reads as the sea
       roughness: 0.18,
       metalness: 0.16,
-      flatShading: true,
-      transparent: true,
-      opacity: 0.95
+      flatShading: true
     });
 
     this.waveFoamMat = new THREE.MeshStandardMaterial({
@@ -241,10 +328,62 @@ export class Wrackline3D {
       flatShading: true
     });
 
+    // Shallow water sheeting up the beach: transparent, and offset toward the
+    // camera so the sand underneath can never poke through it.
+    this.waveSheetMat = new THREE.MeshStandardMaterial({
+      color: 0x36A2D0,
+      roughness: 0.2,
+      metalness: 0.14,
+      flatShading: true,
+      transparent: true,
+      opacity: 0.45,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -3,
+      polygonOffsetUnits: -3
+    });
+
     this.woodMat = new THREE.MeshStandardMaterial({
       color: 0xA68552,
       roughness: 0.82,
       metalness: 0.04,
+      flatShading: true
+    });
+
+    // Bleached driftwood is greyer than living wood; kelp is olive-brown when it
+    // has dried on the sand.
+    this.driftwoodMat = new THREE.MeshStandardMaterial({
+      color: 0xBFAE93,
+      roughness: 0.9,
+      metalness: 0.03,
+      flatShading: true
+    });
+
+    this.kelpMat = new THREE.MeshStandardMaterial({
+      color: 0x51603A,
+      roughness: 0.72,
+      metalness: 0.05,
+      flatShading: true
+    });
+
+    this.kelpBulbMat = new THREE.MeshStandardMaterial({
+      color: 0x74803F,
+      roughness: 0.6,
+      metalness: 0.04,
+      flatShading: true
+    });
+
+    this.shellMat = new THREE.MeshStandardMaterial({
+      color: 0xF2E6D2,
+      roughness: 0.45,
+      metalness: 0.06,
+      flatShading: true
+    });
+
+    this.crabMat = new THREE.MeshStandardMaterial({
+      color: 0xB65C42,
+      roughness: 0.5,
+      metalness: 0.06,
       flatShading: true
     });
 
@@ -337,6 +476,7 @@ export class Wrackline3D {
     this.grassGroup = new THREE.Group();
     this.wrackGroup = new THREE.Group();
     this.buildLowPolyScenery();
+    this.buildBeachDetail();
     this.scene.add(this.treeGroup);
     this.scene.add(this.rockGroup);
     this.scene.add(this.grassGroup);
@@ -444,6 +584,8 @@ export class Wrackline3D {
     corona.position.set(44, 26, -41.5);
     corona.lookAt(this.baseCameraPos);
     this.sunGroup.add(corona);
+    this.sunCorona = corona;
+    this.sunCoronaMat = coronaMat;
 
     // Stylized Low-Poly Clouds (Clusters of faceted boxes and dodecahedrons)
     const cloudMat = new THREE.MeshStandardMaterial({
@@ -477,17 +619,18 @@ export class Wrackline3D {
       cGroup.add(p3);
       cGroup.add(p4);
       this.cloudsGroup.add(cGroup);
+      this.cloudDrift.push(cGroup);
     }
   }
 
   // 4. Build Low-Poly Scenery: Coastal Pines, Boulders, Grass & Driftwood
   buildLowPolyScenery() {
     // 4.1 Low-Poly Coastal Pines (Inland dunes)
-    for (let i = 0; i < 14; i++) {
+    for (let i = 0; i < 18; i++) {
       const tree = new THREE.Group();
-      const x = -16 - Math.random() * 22;
+      const x = -5 - Math.random() * 21;
       const z = (Math.random() - 0.5) * 48;
-      const groundY = 1.2 - x * 0.11;
+      const groundY = duneHeight(x, z) - 0.06;
       tree.position.set(x, groundY, z);
 
       // Faceted trunk (hexagonal cylinder)
@@ -520,6 +663,7 @@ export class Wrackline3D {
       tree.scale.set(scale, scale, scale);
       tree.rotation.y = Math.random() * Math.PI * 2;
       this.treeGroup.add(tree);
+      this.swayTrees.push(tree);
     }
 
     // 4.2 Low-Poly Granite Boulders
@@ -528,9 +672,14 @@ export class Wrackline3D {
       const z = (Math.random() - 0.5) * 44;
       const r = 0.5 + Math.random() * 0.9;
 
-      const rockGeo = new THREE.DodecahedronGeometry(r, 0);
+      // Mixed faceting so no two boulders read as the same stamped shape.
+      const rockGeo =
+        Math.random() < 0.5
+          ? new THREE.DodecahedronGeometry(r, 0)
+          : new THREE.IcosahedronGeometry(r * 0.94, 0);
       const rock = new THREE.Mesh(rockGeo, this.rockMat);
-      rock.position.set(x, 0.2 - x * 0.09, z);
+      // Sit on the sand and sink slightly, so boulders read as embedded.
+      rock.position.set(x, groundHeightAt(x, z) - r * 0.24, z);
       rock.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, 0);
       rock.scale.set(1 + (Math.random() - 0.5) * 0.4, 0.75, 1 + (Math.random() - 0.5) * 0.4);
       rock.castShadow = true;
@@ -543,7 +692,7 @@ export class Wrackline3D {
       const clump = new THREE.Group();
       const x = -10 - Math.random() * 16;
       const z = (Math.random() - 0.5) * 44;
-      clump.position.set(x, 0.9 - x * 0.11, z);
+      clump.position.set(x, groundHeightAt(x, z), z);
 
       for (let b = 0; b < 4; b++) {
         const bladeGeo = new THREE.ConeGeometry(0.09, 1.2 + Math.random() * 0.6, 3);
@@ -554,75 +703,233 @@ export class Wrackline3D {
         clump.add(blade);
       }
       this.grassGroup.add(clump);
+      this.swayGrass.push(clump);
     }
 
-    // 4.4 Low-Poly Wrack Line Flotsam
-    for (let i = 0; i < 24; i++) {
+    // 4.4 Low-Poly Wrack Line Flotsam (kelp, branched driftwood, shells, stone)
+    for (let i = 0; i < 26; i++) {
       const z = (Math.random() - 0.5) * 44;
-      const x = (Math.random() - 0.5) * 2.4;
-      const r = Math.random();
+      const x = (Math.random() - 0.5) * 2.8;
+      const piece = this.createWrackPiece();
+      piece.position.set(x, 0.16, z);
+      this.wrackItems.push({ mesh: piece, x, z, lift: 0.02 + Math.random() * 0.05 });
+      this.wrackGroup.add(piece);
+    }
+  }
 
-      if (r < 0.55) {
-        // Hexagonal driftwood log
-        const len = 1.3 + Math.random() * 1.8;
-        const rad = 0.14 + Math.random() * 0.12;
-        const logGeo = new THREE.CylinderGeometry(rad * 0.8, rad, len, 6);
-        logGeo.rotateZ(Math.PI / 2);
-        const log = new THREE.Mesh(logGeo, this.woodMat);
-        log.position.set(x, 0.16, z);
-        log.rotation.y = (Math.random() - 0.5) * 1.8;
-        log.castShadow = true;
-        this.wrackGroup.add(log);
-      } else {
-        // Low-poly beach pebble / shell
-        const pebbleGeo = new THREE.OctahedronGeometry(0.22, 0);
-        const pebble = new THREE.Mesh(pebbleGeo, this.rockMat);
-        pebble.position.set(x, 0.12, z);
-        pebble.rotation.set(Math.random(), Math.random(), 0);
-        this.wrackGroup.add(pebble);
+  // 4.4b A single piece of natural shore wrack. Everything the tide leaves behind
+  //      is a tangle, a branch, a shell or a stone — never a stamped cylinder.
+  createWrackPiece(): THREE.Object3D {
+    const piece = new THREE.Group();
+    const roll = Math.random();
+
+    if (roll < 0.32) {
+      // Tangle of kelp: a short stipe with flattened blades off it.
+      const stipe = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.07, 0.5, 5), this.kelpMat);
+      stipe.rotation.z = Math.PI / 2;
+      piece.add(stipe);
+
+      const blades = 3 + Math.floor(Math.random() * 3);
+      for (let b = 0; b < blades; b++) {
+        const len = 0.7 + Math.random() * 1.2;
+        const blade = new THREE.Mesh(
+          new THREE.BoxGeometry(len, 0.05, 0.2 + Math.random() * 0.16),
+          this.kelpMat
+        );
+        blade.position.set((Math.random() - 0.5) * 0.5, 0.03, (Math.random() - 0.5) * 0.4);
+        blade.rotation.set(
+          (Math.random() - 0.5) * 0.25,
+          Math.random() * Math.PI,
+          (Math.random() - 0.5) * 0.5
+        );
+        piece.add(blade);
       }
+
+      if (Math.random() < 0.6) {
+        const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.13, 6, 4), this.kelpBulbMat);
+        bulb.position.set((Math.random() - 0.5) * 0.6, 0.08, (Math.random() - 0.5) * 0.4);
+        piece.add(bulb);
+      }
+    } else if (roll < 0.6) {
+      // Branched driftwood: a bleached trunk with one or two stubs left on it.
+      const len = 0.9 + Math.random() * 1.6;
+      const rad = 0.09 + Math.random() * 0.08;
+      const trunk = new THREE.Mesh(
+        new THREE.CylinderGeometry(rad * 0.75, rad, len, 6),
+        this.driftwoodMat
+      );
+      trunk.rotation.z = Math.PI / 2;
+      piece.add(trunk);
+
+      const branches = 1 + Math.floor(Math.random() * 2);
+      for (let b = 0; b < branches; b++) {
+        const branch = new THREE.Mesh(
+          new THREE.CylinderGeometry(rad * 0.35, rad * 0.62, len * 0.5, 5),
+          this.driftwoodMat
+        );
+        branch.position.set((Math.random() - 0.5) * len * 0.7, rad * 0.85, 0);
+        branch.rotation.set(
+          Math.PI / 2.6 + (Math.random() - 0.5) * 0.5,
+          Math.random() * Math.PI,
+          0
+        );
+        piece.add(branch);
+      }
+    } else if (roll < 0.78) {
+      // Scallop shell, folded into a faceted fan.
+      const shell = new THREE.Mesh(
+        new THREE.ConeGeometry(0.2 + Math.random() * 0.12, 0.1, 5),
+        this.shellMat
+      );
+      shell.rotation.x = Math.PI;
+      shell.scale.set(1, 0.65, 1);
+      piece.add(shell);
+    } else if (roll < 0.9) {
+      // Crab carapace, half buried with its claws out.
+      const crab = new THREE.Mesh(new THREE.SphereGeometry(0.22, 6, 4), this.crabMat);
+      crab.scale.set(1.15, 0.4, 0.85);
+      piece.add(crab);
+      for (let c = 0; c < 2; c++) {
+        const claw = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.05, 0.09), this.crabMat);
+        claw.position.set(0.22, 0, c === 0 ? 0.14 : -0.14);
+        piece.add(claw);
+      }
+    } else {
+      // Weathered stone, flattened the way surf stones sit.
+      const s = 0.16 + Math.random() * 0.2;
+      const stone = new THREE.Mesh(
+        Math.random() < 0.5
+          ? new THREE.DodecahedronGeometry(s, 0)
+          : new THREE.IcosahedronGeometry(s * 0.9, 0),
+        this.rockMat
+      );
+      stone.scale.set(1.1, 0.62, 1);
+      piece.add(stone);
+    }
+
+    piece.rotation.y = Math.random() * Math.PI * 2;
+    const sc = 0.85 + Math.random() * 0.5;
+    piece.scale.set(sc, sc, sc);
+    piece.traverse(o => {
+      o.castShadow = true;
+    });
+    return piece;
+  }
+
+  // 4.5 Scattered beach detail across the dry sand, so the mid-beach reads as a
+  //     real shore rather than a blank plane. Spread over the whole stretch the
+  //     player can see and walk, not just the strip behind the wrack line, and
+  //     bedded on the terrain sampler.
+  buildBeachDetail() {
+    for (let i = 0; i < 62; i++) {
+    const x = -8 + Math.random() * 44;
+    const z = (Math.random() - 0.5) * 52;
+    const s = 0.08 + Math.random() * 0.2;
+
+    const roll = Math.random();
+    let detail: THREE.Mesh;
+    if (roll < 0.4) {
+      detail = new THREE.Mesh(new THREE.OctahedronGeometry(s, 0), this.rockMat);
+    } else if (roll < 0.66) {
+      detail = new THREE.Mesh(new THREE.DodecahedronGeometry(s, 0), this.rockMat);
+    } else if (roll < 0.86) {
+      const stickGeo = new THREE.CylinderGeometry(s * 0.5, s * 0.5, s * 3.4, 5);
+      stickGeo.rotateZ(Math.PI / 2);
+      detail = new THREE.Mesh(stickGeo, this.driftwoodMat);
+    } else {
+      // Odd strand of kelp dried onto the sand.
+      const blade = new THREE.Mesh(
+        new THREE.BoxGeometry(s * 4.2, s * 0.35, s * 0.85),
+        this.kelpMat
+      );
+      detail = blade;
+    }
+
+    const isStone = roll < 0.75;
+    detail.position.set(x, groundHeightAt(x, z) + s * 0.2, z);
+    detail.rotation.set(
+      isStone ? Math.random() * Math.PI : (Math.random() - 0.5) * 0.2,
+      Math.random() * Math.PI * 2,
+      isStone ? Math.random() * Math.PI : (Math.random() - 0.5) * 0.2
+    );
+    // Tiny debris: receive shadows but stay out of the shadow pass.
+    detail.receiveShadow = true;
+    this.rockGroup.add(detail);
+
+    // A couple of neighbours for the stones, because shingle on a beach arrives
+    // in patches rather than one pebble at a time.
+    if (isStone && Math.random() < 0.5) {
+      const n = 1 + Math.floor(Math.random() * 2);
+      for (let k = 0; k < n; k++) {
+        const cs = s * (0.5 + Math.random() * 0.6);
+        const chip = new THREE.Mesh(
+          new THREE.DodecahedronGeometry(cs, 0),
+          this.rockMat
+        );
+        const cx = x + (Math.random() - 0.5) * 1.6;
+        const cz = z + (Math.random() - 0.5) * 1.6;
+        chip.position.set(cx, groundHeightAt(cx, cz) + cs * 0.15, cz);
+        chip.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, 0);
+        chip.scale.set(1.1, 0.6, 1);
+        chip.receiveShadow = true;
+        this.rockGroup.add(chip);
+      }
+    }
     }
   }
 
   // 5. Build Low-Poly Wave Breaker Surge
+  //
+  //     Nothing here is a finished shape: the breaker is four flat water surfaces
+  //     that get draped onto the beach every frame (see update()). Local +X is
+  //     out to sea, local 0 is the toe of the wave.
   buildLowPolyWave() {
-    // 5.1 Faceted Wave Swell Body
-    const swellGeoRaw = new THREE.PlaneGeometry(16, 74, 20, 16);
-    swellGeoRaw.rotateX(-Math.PI / 2);
-    const pos = swellGeoRaw.attributes.position;
-    for (let i = 0; i < pos.count; i++) {
-      const u = (pos.getX(i) + 8) / 16;
-      const h = Math.sin(u * Math.PI) * 3.1;
-      pos.setY(i, h);
-    }
-    const nonIndexedSwell = swellGeoRaw.toNonIndexed();
-    nonIndexedSwell.computeVertexNormals();
+    // A long-shore sheet of water, positioned along local X and stored with its
+    // untouched vertex positions so update() can rebuild it in place.
+    const waterSheet = (
+      x0: number,
+      x1: number,
+      segX: number,
+      segZ: number,
+      mat: THREE.Material
+    ) => {
+      const len = x1 - x0;
+      const geo = new THREE.PlaneGeometry(len, WAVE_DEPTH, segX, segZ);
+      geo.rotateX(-Math.PI / 2);
+      geo.translate(x0 + len / 2, 0, 0);
+      const nonIndexed = geo.toNonIndexed();
+      nonIndexed.computeVertexNormals();
+      const mesh = new THREE.Mesh(nonIndexed, mat);
+      return {
+        mesh,
+        geo: nonIndexed,
+        initial: new Float32Array(nonIndexed.attributes.position.array)
+      };
+    };
 
-    this.waveSwellMesh = new THREE.Mesh(nonIndexedSwell, this.waveSwellMat);
-    this.waveSwellMesh.position.set(0, -1.2, 0);
+    // 5.1 The swell body: short steep face, crest, then a long tail that eases
+    //     back down into the open sea behind it.
+    const swell = waterSheet(WAVE_SWELL_X0, WAVE_SWELL_X1, 14, 12, this.waveSwellMat);
+    this.waveSwellMesh = swell.mesh;
+    this.waveSwellGeo = swell.geo;
+    this.swellInitialPositions = swell.initial;
     this.waveGroup.add(this.waveSwellMesh);
 
-    // 5.2 Angular Low-Poly Wave Crest Lip (Sharp white faceted break)
-    const crestGeo = new THREE.CylinderGeometry(0.65, 0.9, 74, 6);
-    crestGeo.rotateZ(Math.PI / 2);
-    this.waveCrestMesh = new THREE.Mesh(crestGeo, this.waveFoamMat);
-    this.waveCrestMesh.position.set(1.5, 1.8, 0);
-    this.waveGroup.add(this.waveCrestMesh);
+    // 5.2 The breaking lip: whitewater over the face of the swell and over the
+    //     crest. One piece, so the foam never reads as two separate stripes.
+    const lip = waterSheet(WAVE_LIP_X0, WAVE_LIP_X1, 8, 14, this.waveFoamMat);
+    this.waveLipMesh = lip.mesh;
+    this.waveLipGeo = lip.geo;
+    this.lipInitialPositions = lip.initial;
+    this.waveGroup.add(this.waveLipMesh);
 
-    // 5.3 Low-Poly Whitewash Blanket
-    const foamGeoRaw = new THREE.PlaneGeometry(14, 74, 12, 12);
-    foamGeoRaw.rotateX(-Math.PI / 2);
-    const fpos = foamGeoRaw.attributes.position;
-    for (let i = 0; i < fpos.count; i++) {
-      const u = (fpos.getX(i) + 7) / 14;
-      fpos.setY(i, Math.sin(u * 3) * 0.25);
-    }
-    const nonIndexedFoam = foamGeoRaw.toNonIndexed();
-    nonIndexedFoam.computeVertexNormals();
-
-    this.waveFoamMesh = new THREE.Mesh(nonIndexedFoam, this.waveFoamMat);
-    this.waveFoamMesh.position.set(-7.5, -1.8, 0);
-    this.waveGroup.add(this.waveFoamMesh);
+    // 5.3 The shallow sheet of water connecting the breaker back to the sea.
+    const sheet = waterSheet(WAVE_SHEET_X0, WAVE_SHEET_X1, 13, 9, this.waveSheetMat);
+    this.waveSheetMesh = sheet.mesh;
+    this.waveSheetGeo = sheet.geo;
+    this.sheetInitialPositions = sheet.initial;
+    this.waveSheetMesh.renderOrder = 1;
+    this.waveGroup.add(this.waveSheetMesh);
   }
 
   // 6. Build Low-Poly Scavenger Creature (Hero Hermit Scuttler)
@@ -999,6 +1306,25 @@ export class Wrackline3D {
     if (this.isDisposed) return;
     this.oceanTime += dt;
 
+    // 9.0 Living scenery: drifting clouds, swaying grass, breathing pines, sun shimmer
+    for (let i = 0; i < this.cloudDrift.length; i++) {
+      const c = this.cloudDrift[i];
+      c.position.x -= dt * (0.5 + i * 0.14);
+      if (c.position.x < -54) c.position.x = 54;
+    }
+    for (let i = 0; i < this.swayGrass.length; i++) {
+      const g = this.swayGrass[i];
+      g.rotation.z = Math.sin(this.oceanTime * 1.15 + i * 1.7) * 0.07 + 0.02;
+      g.rotation.x = Math.cos(this.oceanTime * 0.9 + i * 1.13) * 0.04;
+    }
+    for (let i = 0; i < this.swayTrees.length; i++) {
+      this.swayTrees[i].rotation.z = Math.sin(this.oceanTime * 0.7 + i * 2.3) * 0.018;
+    }
+    if (this.sunCorona && this.sunCoronaMat) {
+      this.sunCorona.scale.setScalar(1 + Math.sin(this.oceanTime * 0.8) * 0.06);
+      this.sunCoronaMat.opacity = 0.3 + Math.sin(this.oceanTime * 0.55) * 0.09;
+    }
+
     // 9.1 Animate Low-Poly Ocean Vertices
     if (this.seaGeoNonIndexed && this.seaInitialPositions) {
       const pos = this.seaGeoNonIndexed.attributes.position;
@@ -1025,24 +1351,102 @@ export class Wrackline3D {
     // 9.2 Position Wrack Line Flotsam
     const wrackTargetX = 4 + wrackLineRatio * 14;
     this.wrackGroup.position.x = wrackTargetX;
-
-    // 9.3 Low-Poly Wave Breaker Surge Position
-    const wave3DX = 52 - waveRatio * 55;
-    this.waveGroup.position.x = wave3DX;
-
-    // Subtle wave crest roll
-    if (this.waveCrestMesh) {
-      this.waveCrestMesh.rotation.x = Math.sin(this.oceanTime * 4) * 0.25;
+    // Bed every piece of flotsam on the sand it is currently passing over, so
+    // the debris line rides the dunes and the shore slope as it advances.
+    for (const item of this.wrackItems) {
+      item.mesh.position.y = groundHeightAt(wrackTargetX + item.x, item.z) + item.lift;
     }
 
+    // 9.3 Low-Poly Wave Breaker Surge
+    const wave3DX = 52 - waveRatio * 55;
+    this.waveGroup.position.x = wave3DX;
+    // Rise as it feels the bottom, with a slow vertical swell under it.
+    this.waveGroup.position.y = waveRatio * 0.25 + Math.sin(this.oceanTime * 1.7) * 0.07;
+    // The surge is water and nothing else, so between waves there is nothing to
+    // show. Without this the swell and its sheet would sit out on the open sea as
+    // loose geometry through all of low tide.
+    this.waveGroup.visible = waveRatio > 0.04;
+
+    const wGroupX = this.waveGroup.position.x;
+    const wGroupY = this.waveGroup.position.y;
+    const wt = this.oceanTime;
+
+    // Shoaling: the face steepens, the crest drifts shoreward, and the body eases
+    // off once it has broken.
+    const collapse = waveRatio > 0.86 ? Math.max(0, 1 - (waveRatio - 0.86) / 0.14) : 1;
+    const bodyH = WAVE_HEIGHT * (1 + waveRatio * 0.5) * (0.35 + 0.65 * collapse);
+    const crestX = WAVE_PEAK_X - waveRatio * 0.9;
+    const longShore = (lz: number) =>
+      0.86 + 0.14 * Math.sin(lz * 0.3 + wt * 0.55) + 0.08 * Math.sin(lz * 0.85 - wt * 1.35);
+
+    // Re-drape one water surface onto the beach. `shape` is the height of the water
+    // above the local waterline; the waterline itself comes from the terrain the
+    // surge is crossing, which is what ties the breaker to the sea.
+    const drape = (
+      geo: THREE.BufferGeometry | undefined,
+      initial: Float32Array | undefined,
+      shape: (lx: number, lz: number) => number
+    ) => {
+      if (!geo || !initial) return;
+      const pos = geo.attributes.position;
+      for (let i = 0; i < pos.count; i++) {
+        const lx = initial[i * 3];
+        const lz = initial[i * 3 + 2];
+        pos.setY(i, waterSurfaceY(wGroupX + lx, lz) - wGroupY + shape(lx, lz));
+      }
+      pos.needsUpdate = true;
+      geo.computeVertexNormals();
+    };
+
+    drape(this.waveSwellGeo, this.swellInitialPositions, (lx, lz) => {
+      // The inland edge of the body is buried under the sand over an irregular
+      // distance, so the waterline wanders along the shore instead of being a
+      // ruled line running the length of the beach.
+      const reach = 2.6 + 1.3 * Math.sin(lz * 0.7) + 0.7 * Math.sin(lz * 2.1 + 0.8);
+      const buried = -1.1 * Math.max(0, 1 - (lx - WAVE_SWELL_X0) / reach);
+      const roll = 0.09 * Math.sin(lx * 0.6 - wt * 1.7);
+      return waveProfile(lx, crestX, bodyH * longShore(lz)) + buried + roll;
+    });
+
+    // The lip caps the crest and sinks back into the swell just behind the peak, so
+    // the foam dissolves into the water instead of ending on a straight edge.
+    drape(this.waveLipGeo, this.lipInitialPositions, (lx, lz) => {
+      const body = waveProfile(lx, crestX, bodyH * longShore(lz));
+      const settle = Math.max(0, lx - crestX) * 0.85;
+      const churn = Math.sin(lz * 1.7 + wt * 6) * 0.06 + Math.sin(lz * 4.1 - wt * 3) * 0.03;
+      const lipReach = 2.4 + 1.2 * Math.sin(lz * 0.8 + 0.6) + 0.6 * Math.sin(lz * 2.3);
+      const buried = -1.0 * Math.max(0, 1 - (lx - WAVE_LIP_X0) / lipReach);
+      return body + 0.08 + churn - settle + buried;
+    });
+
+    // The shallow sheet running from the breaker back out to the open sea. Its
+    // inland end is buried under the sand, so the waterline is simply where the
+    // beach crosses the sheet.
+    drape(this.waveSheetGeo, this.sheetInitialPositions, (lx, lz) => {
+      const ripple =
+        0.05 * Math.sin(lx * 0.7 + wt * 2.1) + 0.04 * Math.sin(lz * 0.5 - wt * 1.6);
+      // The wetted edge wanders along the shore instead of ending on a ruled line.
+      const reach = 2.8 + 1.4 * Math.sin(lz * 0.6) + 0.7 * Math.sin(lz * 1.9 + 1.2);
+      const buried = -1.0 * Math.max(0, 1 - (lx - WAVE_SHEET_X0) / reach);
+      return ripple + buried;
+    });
+
     if (waveRatio > 0.05 && waveRatio < 0.95 && Math.random() < 0.45) {
-      this.addSprayParticle(wave3DX + (Math.random() - 0.5) * 3, 1.2, (Math.random() - 0.5) * 28, false);
+      this.addSprayParticle(
+        wave3DX + crestX + (Math.random() - 0.5) * 3,
+        waterSurfaceY(wave3DX + crestX, 0) + bodyH * 0.7,
+        (Math.random() - 0.5) * 28,
+        false
+      );
     }
 
     // 9.4 Hero Hermit Scuttler Positioning & Animation
-    const groundSlopeY = -playerX3D * 0.11;
+    //      The creature and everything riding on it sit on the sand it is actually
+    //      standing on, rather than on a straight ramp that only matches the beach
+    //      near the middle of the shore.
+    const groundSlopeY = groundHeightAt(playerX3D, 0);
     this.blobGroup.position.x = playerX3D;
-    this.blobGroup.position.y = 0.85 + groundSlopeY;
+    this.blobGroup.position.y = groundSlopeY + 0.98;
 
     // Subtle breathing / scuttling sway
     const breathing = Math.sin(this.oceanTime * 3) * 0.04;
