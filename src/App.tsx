@@ -62,7 +62,7 @@ const DIFFS: Record<string, DiffConfig> = {
 };
 
 // A season is thirteen waves, and surviving all of them is the win. Hearts are the only
-// losing condition, so the wrack line never ends a run by surprise — it just keeps
+// losing condition, so the wrack line never ends a run by surprise: it just keeps
 // eating the shore, which makes the closing waves tighter. Every ending has a cause.
 //
 // The low-tide window used to floor out at wave seven, which meant waves seven through
@@ -76,6 +76,15 @@ const INVULN_TIME = 1.2;
 // Digging in. Held under the sand the surge passes over you unharmed, and the price is
 // everything in your claws: the haul spills onto the sand and the water takes it.
 const DIG_IN_TIME = 0.3;
+
+// Banking in the last breath of the warning, before the surge lands on the shore.
+// Rate-limited to once per wave on purpose: if every bank paid the bonus the score would
+// inflate and the greed decision the whole game rests on would stop meaning anything.
+const NEAR_MISS_WINDOW = 0.45;
+const NEAR_MISS_BONUS = 1.5;
+// A short slow-motion beat sells the escape. The clock is scaled in exactly one place.
+const NEAR_MISS_SLOW_FACTOR = 0.45;
+const NEAR_MISS_SLOW_FRAMES = 10;
 
 // Named stretches of the season, so a run has rungs without a level-select screen.
 const TIERS: { from: number; name: string }[] = [
@@ -102,6 +111,51 @@ interface FloatingPopup {
   // Grabs tick past in a stream, so they are quiet and small. Banks are the loud ones.
   size: 'small' | 'big';
 }
+
+// Line-art icons, drawn rather than typed. The emoji speaker arrived as a different
+// picture on every platform (on iOS it looked like a telephone handset), and a mismatched
+// glyph sitting beside flat low-poly geometry is exactly the detail that reads as
+// unfinished. Two strokes each, so they match the ◀ ▶ ▼ controls under them.
+const IconSound: React.FC<{ muted: boolean }> = ({ muted }) => (
+  <svg
+    viewBox="0 0 24 24"
+    className="w-5 h-5"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={2.1}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M4 9.4h3.3L11.6 6v12L7.3 14.6H4z" fill="currentColor" stroke="none" />
+    {muted ? (
+      <path d="M15.2 9.6l4.8 4.8m0-4.8l-4.8 4.8" />
+    ) : (
+      <>
+        <path d="M15 9.3a4.2 4.2 0 010 5.4" />
+        <path d="M18 6.9a8 8 0 010 10.2" />
+      </>
+    )}
+  </svg>
+);
+
+const IconExpand: React.FC = () => (
+  <svg
+    viewBox="0 0 24 24"
+    className="w-5 h-5"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={2.1}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M4 9V4h5" />
+    <path d="M20 15v5h-5" />
+    <path d="M15 4h5v5" />
+    <path d="M9 20H4v-5" />
+  </svg>
+);
 
 export default function App() {
   const [appState, setAppState] = useState<'LOADING' | 'TITLE' | 'PLAYING' | 'DEAD' | 'WIN' | 'ERROR'>(
@@ -135,7 +189,16 @@ export default function App() {
   const [popups, setPopups] = useState<FloatingPopup[]>([]);
   const [wavesSurvived, setWavesSurvived] = useState<number>(0);
   const [showGuide, setShowGuide] = useState<boolean>(false);
+  // Read once, and only ever used to choose which words to show. A phone has no A, D,
+  // Space or B key, and printing key names at someone holding a phone is the fastest way
+  // to make a game look like it was never opened on one. Coarse or hoverless pointer
+  // covers phones and tablets without catching a desktop that merely has a touchscreen.
+  const [isTouch] = useState<boolean>(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return false;
+    return window.matchMedia('(pointer: coarse)').matches || window.matchMedia('(hover: none)').matches;
+  });
   const [showInputCue, setShowInputCue] = useState<boolean>(true);
+  const [shareNote, setShareNote] = useState<string>('');
 
   // Active key state for UI visual feedback on buttons
   const [activeKeys, setActiveKeys] = useState({
@@ -160,6 +223,9 @@ export default function App() {
   // Pause lives in a ref as well as state: the animation frame reads the ref, and the
   // HUD reads the state.
   const pausedRef = useRef(false);
+  // Slow-motion frames still owed from a last-instant bank, and the wave already paid for.
+  const nearMissSlowRef = useRef(0);
+  const lastNearMissWaveRef = useRef(-1);
   const introTimerRef = useRef<number | null>(null);
 
   // Synchronous Game State Ref
@@ -307,7 +373,7 @@ export default function App() {
 
       // Risk pays. The surge arrives from the seaward end and takes the furthest loot
       // first, so the further up the shore a piece sits the less time there is to
-      // reach it — and the more it is worth for the trouble.
+      // reach it, and the more it is worth for the trouble.
       const risk = Math.max(0, Math.min(1, (spawnX - 14) / 30));
       const val = Math.round(baseVal * s.currentDiff.multiplier * (1 + risk * 1.2));
 
@@ -370,8 +436,8 @@ export default function App() {
 
     spawnCycleLoot();
 
-    // Announce the wave you have just walked into. This is progress, not danger — the
-    // water carries the danger now — and it is what gives the season its rungs.
+    // Announce the wave you have just walked into. This is progress, not danger. The
+    // water carries the danger now, and it is what gives the season its rungs.
     setWaveIntro(`WAVE ${s.waveIndex + 1} · ${tierForWave(s.waveIndex + 1)} · ${s.currentDiff.name}`);
     if (introTimerRef.current !== null) window.clearTimeout(introTimerRef.current);
     introTimerRef.current = window.setTimeout(() => setWaveIntro(null), 1800);
@@ -514,6 +580,22 @@ export default function App() {
       earned *= 2;
     }
 
+    // Snuck it: banking in the last breath of the warning, with the surge already moving.
+    // This is the moment the run is remembered for, so it is loud where an ordinary bank
+    // is quiet, but it only pays once per wave (see lastNearMissWaveRef).
+    const timeLeft = s.phaseDuration - s.phaseTimer;
+    const nearMiss =
+      s.cyclePhase === 'WARNING' &&
+      timeLeft > 0 &&
+      timeLeft <= NEAR_MISS_WINDOW &&
+      lastNearMissWaveRef.current !== s.waveIndex;
+
+    if (nearMiss) {
+      lastNearMissWaveRef.current = s.waveIndex;
+      earned = Math.max(1, Math.round(earned * NEAR_MISS_BONUS));
+      nearMissSlowRef.current = NEAR_MISS_SLOW_FRAMES;
+    }
+
     s.banked += earned;
     s.held = 0;
     setBankedScore(s.banked);
@@ -521,11 +603,11 @@ export default function App() {
 
     const newPopup: FloatingPopup = {
       id: Date.now(),
-      text: isKing ? `+${earned} (2X)` : `+${earned}`,
+      text: nearMiss ? `SNUCK IT  +${earned}` : isKing ? `+${earned} (2X)` : `+${earned}`,
       x: 50,
       y: 45,
       alpha: 1,
-      isGold: isKing,
+      isGold: nearMiss || isKing,
       size: 'big'
     };
     setPopups(prev => [...prev.slice(-3), newPopup]);
@@ -540,7 +622,7 @@ export default function App() {
 
     playThock();
     if (engine3dRef.current) {
-      engine3dRef.current.triggerImpactShake(0.35);
+      engine3dRef.current.triggerImpactShake(nearMiss ? 0.95 : 0.35);
     }
     s.playerSquashY = 0.65;
     s.playerSquashX = 1.35;
@@ -792,7 +874,12 @@ export default function App() {
     let animId: number;
 
     const tick = (now: number) => {
-      const dt = Math.min((now - lastTime) / 1000, 0.05);
+      // A last-instant bank drops the world into a brief slow motion. Everything in the
+      // simulation reads this one clock, so scaling it here slows all of it coherently.
+      const slowing = nearMissSlowRef.current > 0;
+      if (slowing) nearMissSlowRef.current -= 1;
+      const dt =
+        Math.min((now - lastTime) / 1000, 0.05) * (slowing ? NEAR_MISS_SLOW_FACTOR : 1);
       lastTime = now;
 
       const s = stateRef.current;
@@ -802,7 +889,7 @@ export default function App() {
 
         // Digging in. Once the shell is under the sand the shell comes up empty: the
         // haul spills around you, marked so it can never be gathered again, and the
-        // surge takes it as it crosses. That cost is the whole mechanic — without it
+        // surge takes it as it crosses. That cost is the whole mechanic, and without it
         // diving would just delete the decision the game is built on.
         if (s.digging && !s.isBurrowed) {
           if (!keysRef.current.burrow) {
@@ -1038,7 +1125,9 @@ export default function App() {
           s.isMoving,
           s.moveDir,
           s.isBurrowed ? 1 : s.digging ? Math.min(1, s.digTimer / DIG_IN_TIME) : 0,
-          drawdown
+          drawdown,
+          // 0 on the first wave, 1 on the last: the season's gloom, applied in the engine.
+          Math.min(1, s.waveIndex / (SEASON_WAVES - 1))
         );
       }
 
@@ -1049,8 +1138,32 @@ export default function App() {
     return () => cancelAnimationFrame(animId);
   }, [enterWarning, enterSweep, enterRetreat, finishCycle, endRun]);
 
+  // The score card exists only inside this browser, so one run is invisible to everyone
+  // else. This puts it where a friend or a judge can see it. It fails silently on purpose:
+  // a share button that throws is worse than no share button.
+  const shareResult = useCallback(async () => {
+    const headline =
+      endCause === 'SURVIVED'
+        ? `I OUTLASTED THE TIDE in WRACKLINE · ${bankedScore}`
+        : `The surge took me on wave ${wavesSurvived + 1} · ${bankedScore} in WRACKLINE`;
+    const url = 'https://wrackline.vercel.app';
+    const text = `${headline} · ${selectedDiff.name} tide`;
+
+    try {
+      if (typeof navigator !== 'undefined' && navigator.share) {
+        await navigator.share({ title: 'WRACKLINE', text, url });
+      } else if (typeof navigator !== 'undefined' && navigator.clipboard) {
+        await navigator.clipboard.writeText(`${text}\n${url}`);
+        setShareNote('COPIED');
+        window.setTimeout(() => setShareNote(''), 1600);
+      }
+    } catch {
+      // A dismissed share sheet is not a failure worth showing anyone.
+    }
+  }, [endCause, wavesSurvived, bankedScore, selectedDiff]);
+
   return (
-    <div className="relative w-screen h-screen overflow-hidden select-none bg-[#D4E6F4] flex items-center justify-center font-ui">
+    <div className="relative w-full app-shell overflow-hidden select-none bg-[#D4E6F4] flex items-center justify-center font-ui">
       {/* 3D Viewport (Full Screen Canvas) */}
       <div
         ref={container3dRef}
@@ -1076,7 +1189,7 @@ export default function App() {
       />
 
       {/* Top Header Controls: Low-Poly Tactile 3D Buttons */}
-      <div className="absolute top-4 right-4 md:top-5 md:right-5 z-40 flex items-center gap-2 md:gap-3">
+      <div className="absolute top-[max(1rem,env(safe-area-inset-top))] right-[max(1rem,env(safe-area-inset-right))] md:top-5 md:right-5 z-40 flex items-center gap-2 md:gap-3">
         <button
           onClick={() => setShowGuide(prev => !prev)}
           title="Guide & Controls (H)"
@@ -1092,7 +1205,7 @@ export default function App() {
           aria-label={muted ? 'Turn sound on' : 'Turn sound off'}
           className="w-10 h-10 md:w-11 md:h-11 rounded-xl bg-[#FDFBF7] hover:bg-[#EAD7B0] border-2 border-[#17181C] shadow-[0_3px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] text-[#17181C] text-sm flex items-center justify-center transition-all cursor-pointer"
         >
-          {muted ? '🔇' : '🔊'}
+          <IconSound muted={muted} />
         </button>
 
         <button
@@ -1101,7 +1214,7 @@ export default function App() {
           aria-label="Toggle fullscreen"
           className="w-10 h-10 md:w-11 md:h-11 rounded-xl bg-[#FDFBF7] hover:bg-[#EAD7B0] border-2 border-[#17181C] shadow-[0_3px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] text-[#17181C] text-base flex items-center justify-center transition-all cursor-pointer"
         >
-          ⛶
+          <IconExpand />
         </button>
       </div>
 
@@ -1114,7 +1227,7 @@ export default function App() {
             top: `${p.y}%`,
             opacity: p.alpha
           }}
-          className={`absolute -translate-x-1/2 -translate-y-1/2 pointer-events-none font-game transition-transform ${
+          className={`absolute w-max -translate-x-1/2 -translate-y-1/2 pointer-events-none font-game transition-transform ${
             p.size === 'small' ? 'text-xl md:text-2xl' : 'text-4xl'
           } ${
             p.isGold ? 'text-[#F6C445] drop-shadow-[0_2px_0_#17181C]' : 'text-[#17181C] drop-shadow-sm'
@@ -1126,7 +1239,7 @@ export default function App() {
 
       {/* Top Left: Best Record Badge (when in Title state) */}
       {bestScore > 0 && appState === 'TITLE' && (
-        <div className="absolute top-5 left-5 z-40 bg-[#FDFBF7] border-2 border-[#17181C] rounded-2xl px-4 py-2 shadow-[0_3px_0_#17181C] flex items-center gap-2 pointer-events-none">
+        <div className="absolute top-[max(1rem,env(safe-area-inset-top))] left-[max(1rem,env(safe-area-inset-left))] md:top-5 md:left-5 z-40 bg-[#FDFBF7] border-2 border-[#17181C] rounded-2xl px-4 py-2 shadow-[0_3px_0_#17181C] flex items-center gap-2 pointer-events-none">
           <span className="text-[10px] font-black text-[#17181C]/60 uppercase tracking-widest">
             BEST
           </span>
@@ -1170,17 +1283,17 @@ export default function App() {
 
       {/* 2. TITLE SCREEN: Spacious, Uncluttered Low-Poly 3D Art Menu */}
       {appState === 'TITLE' && (
-        <div className="absolute inset-0 flex flex-col justify-between items-center z-40 bg-gradient-to-b from-[#D4E6F4]/25 via-transparent to-[#D4E6F4]/35 pointer-events-auto px-6 pt-7 pb-10 md:pt-9 md:pb-14 select-none">
+        <div className="absolute inset-0 z-40 flex flex-col items-center bg-gradient-to-b from-[#D4E6F4]/25 via-transparent to-[#D4E6F4]/35 pointer-events-auto px-5 md:px-6 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(2rem,env(safe-area-inset-bottom))] md:pt-9 md:pb-14 select-none">
           {/* Top Zone: Clean Title & Subtitle with plenty of air */}
-          <div className="flex flex-col items-center mt-1 md:mt-2 pointer-events-none">
+          <div className="flex flex-col items-center shrink-0 pt-14 pointer-events-none md:pt-2">
             <WracklineLogo size="md" className="mb-3 md:mb-4" />
-            <p className="font-game text-xs md:text-sm text-[#17181C]/75 tracking-widest uppercase leading-relaxed">
+            <p className="font-game text-xs md:text-sm text-[#17181C]/75 tracking-widest uppercase leading-relaxed text-center">
               SURVIVE THE TIDE · HARVEST THE SHORE
             </p>
           </div>
 
           {/* Center Zone: Single Prominent PLAY Button + Labeled Tide Selector */}
-          <div className="flex flex-col items-center w-full max-w-xs md:max-w-sm my-auto">
+          <div className="flex flex-1 flex-col items-center justify-center w-full max-w-xs my-3 md:my-auto md:max-w-sm">
             {/* Primary Action Button: Clear, Big, Unmistakable Breathing Room */}
             <button
               onClick={() => startGame(selectedDiff)}
@@ -1219,25 +1332,25 @@ export default function App() {
           </div>
 
           {/* Bottom Zone: 3-Step Instant Guide - Immediately Explains What Game Is For */}
-          <div className="flex flex-wrap items-center justify-center gap-4 md:gap-7 bg-[#FDFBF7]/90 backdrop-blur-xs border-2 border-[#17181C] px-6 py-3 rounded-2xl shadow-[0_4px_0_#17181C] text-xs font-bold text-[#17181C] mb-1 md:mb-2">
+          <div className="shrink-0 w-full max-w-xs md:w-auto md:max-w-none grid grid-cols-2 gap-x-4 gap-y-2.5 md:flex md:flex-wrap md:items-center md:justify-center md:gap-7 bg-[#FDFBF7]/90 backdrop-blur-xs border-2 border-[#17181C] px-5 py-3.5 md:px-6 md:py-3 rounded-2xl shadow-[0_4px_0_#17181C] text-[11px] md:text-xs font-bold text-[#17181C]">
             <div className="flex items-center gap-1.5">
               <span className="font-game text-sm text-[#24698F]">01</span>
-              <span>SCUTTLE [A / D]</span>
+              <span>{isTouch ? 'SCUTTLE ◀ ▶' : 'SCUTTLE [A / D]'}</span>
             </div>
-            <span className="text-[#17181C]/25 hidden sm:inline">|</span>
+            <span className="text-[#17181C]/25 hidden md:inline">|</span>
             <div className="flex items-center gap-1.5">
               <span className="font-game text-sm text-[#24698F]">02</span>
-              <span>HAUL [SPACE]</span>
+              <span>{isTouch ? 'HOLD TO HAUL' : 'HAUL [SPACE]'}</span>
             </div>
-            <span className="text-[#17181C]/25 hidden sm:inline">|</span>
-            <div className="flex items-center gap-1.5">
+            <span className="text-[#17181C]/25 hidden md:inline">|</span>
+            <div className="col-span-2 md:col-auto flex items-center gap-1.5">
               <span className="font-game text-sm text-[#E25B45]">03</span>
               <span>BANK BEFORE THE SURGE</span>
             </div>
-            <span className="text-[#17181C]/25 hidden sm:inline">|</span>
-            <div className="flex items-center gap-1.5">
+            <span className="text-[#17181C]/25 hidden md:inline">|</span>
+            <div className="col-span-2 md:col-auto flex items-center gap-1.5">
               <span className="font-game text-sm text-[#F6C445]">04</span>
-              <span>DIG IN [B] TO RIDE IT OUT</span>
+              <span>{isTouch ? 'DIG IN TO RIDE IT OUT' : 'DIG IN [B] TO RIDE IT OUT'}</span>
             </div>
           </div>
         </div>
@@ -1246,13 +1359,13 @@ export default function App() {
       {/* 3. PLAYING HUD */}
       {appState === 'PLAYING' && (
         <>
-          {/* Damage flash — fires the moment a surge catches you holding loot */}
+          {/* Damage flash: fires the moment a surge catches you holding loot */}
           {hurtFlash && (
             <div className="absolute inset-0 z-20 pointer-events-none bg-[#E25B45]/25 border-8 border-[#E25B45]/60" />
           )}
 
           {/* Low-Poly Score Card (Top Left) */}
-          <div className="absolute top-4 left-4 md:top-6 md:left-8 pointer-events-none flex flex-col gap-0.5 bg-[#FDFBF7]/95 border-2 border-[#17181C] rounded-2xl p-3 md:p-3.5 shadow-[0_4px_0_#17181C]">
+          <div className="absolute top-[max(1rem,env(safe-area-inset-top))] left-[max(1rem,env(safe-area-inset-left))] md:top-6 md:left-8 pointer-events-none flex flex-col gap-0.5 bg-[#FDFBF7]/95 border-2 border-[#17181C] rounded-2xl p-3 md:p-3.5 shadow-[0_4px_0_#17181C]">
             <span className="text-[10px] font-black text-[#17181C]/60 uppercase tracking-widest">
               SCORE
             </span>
@@ -1260,7 +1373,7 @@ export default function App() {
               {displayedBanked}
             </span>
             {/* Hearts: the only way to lose. A wave that catches you holding costs
-                one. Spent hearts change shape as well as colour — colour on its own
+                one. Spent hearts change shape as well as colour, because colour on its own
                 left them nearly invisible against the card. */}
             <div
               className="flex items-center gap-1 mt-1"
@@ -1279,7 +1392,7 @@ export default function App() {
           </div>
 
           {/* Low-Poly Best & Wave Pill (Top Center-Right) */}
-          <div className="absolute top-16 right-4 md:top-6 md:right-48 pointer-events-none flex items-center gap-2 md:gap-3">
+          <div className="absolute top-[calc(max(1rem,env(safe-area-inset-top))+3.25rem)] right-[max(1rem,env(safe-area-inset-right))] md:top-6 md:right-48 pointer-events-none flex items-center gap-2 md:gap-3">
             <div className="bg-[#FDFBF7]/95 border-2 border-[#17181C] rounded-2xl px-3 py-2 md:px-4 md:py-2.5 shadow-[0_4px_0_#17181C] flex flex-col items-end gap-0.5">
               <span className="text-[10px] font-black text-[#17181C]/60 uppercase tracking-widest">
                 BEST
@@ -1316,7 +1429,7 @@ export default function App() {
           {/* King Tide Banner. It now shows through the draw as well, so a doubling
               wave is announced before it lands and not only between waves. */}
           {isKingTide && (
-            <div className="absolute top-32 md:top-20 left-1/2 -translate-x-1/2 z-30 pointer-events-none font-game bg-[#F6C445] border-2 border-[#17181C] text-[#17181C] text-base md:text-xl px-5 md:px-7 py-2 rounded-xl shadow-[0_4px_0_#17181C] tracking-widest animate-pulse max-w-[92vw] text-center">
+            <div className="absolute top-[calc(max(1rem,env(safe-area-inset-top))+8rem)] md:top-20 left-1/2 -translate-x-1/2 z-30 pointer-events-none w-max font-game bg-[#F6C445] border-2 border-[#17181C] text-[#17181C] text-base md:text-xl px-5 md:px-7 py-2 rounded-xl shadow-[0_4px_0_#17181C] tracking-widest animate-pulse max-w-[92vw] text-center">
               KING TIDE · 2X
             </div>
           )}
@@ -1324,33 +1437,33 @@ export default function App() {
           {/* Which wave you just walked into. Progress, not danger, so it never
               competes with the King Tide call. */}
           {waveIntro && !isKingTide && (
-            <div className="absolute top-24 md:top-16 left-1/2 -translate-x-1/2 z-30 pointer-events-none font-game bg-[#FDFBF7] border-2 border-[#17181C] text-[#17181C] text-xs md:text-base px-3.5 md:px-6 py-1.5 rounded-xl shadow-[0_4px_0_#17181C] tracking-widest max-w-[92vw] text-center">
+            <div className="absolute top-[calc(max(1rem,env(safe-area-inset-top))+8rem)] md:top-16 left-1/2 -translate-x-1/2 z-30 pointer-events-none w-max font-game bg-[#FDFBF7] border-2 border-[#17181C] text-[#17181C] text-xs md:text-base px-3.5 md:px-6 py-1.5 rounded-xl shadow-[0_4px_0_#17181C] tracking-widest max-w-[92vw] text-center">
               {waveIntro}
             </div>
           )}
 
           {/* Held under the sand: the claws are empty and the surge is going over. */}
           {burrowed && (
-            <div className="absolute top-[58%] left-1/2 -translate-x-1/2 z-30 pointer-events-none bg-[#F6C445] border-2 border-[#17181C] px-4 py-1.5 rounded-xl shadow-[0_4px_0_#17181C] font-game text-xs md:text-sm tracking-widest text-[#17181C] uppercase">
+            <div className="absolute top-[58%] left-1/2 -translate-x-1/2 z-30 pointer-events-none w-max bg-[#F6C445] border-2 border-[#17181C] px-4 py-1.5 rounded-xl shadow-[0_4px_0_#17181C] font-game text-xs md:text-sm tracking-widest text-[#17181C] uppercase">
               Dug in · safe, and empty clawed
             </div>
           )}
 
           {/* Short Real Game Input Prompt */}
           {showInputCue && (
-            <div className="absolute bottom-28 left-1/2 -translate-x-1/2 pointer-events-none bg-[#FDFBF7]/95 border-2 border-[#17181C] px-6 py-2.5 rounded-xl shadow-[0_3px_0_#17181C]">
+            <div className="absolute bottom-[calc(max(1.5rem,env(safe-area-inset-bottom))+5.5rem)] left-1/2 -translate-x-1/2 pointer-events-none w-max bg-[#FDFBF7]/95 border-2 border-[#17181C] px-6 py-2.5 rounded-xl shadow-[0_3px_0_#17181C]">
               <span className="font-game text-sm text-[#17181C] tracking-wider uppercase">
-                HOLD [SPACE] TO HAUL
+                {isTouch ? 'HOLD HAUL TO LOOT' : 'HOLD [SPACE] TO HAUL'}
               </span>
             </div>
           )}
 
           {/* Low-Poly Tactile 3D On-Screen Controls */}
           {/* w-max matters. An absolutely positioned row with only `left` set is sized
-              against the space left of it, which on a phone is about half the screen —
+              against the space left of it, which on a phone is about half the screen,
               wrap onto that and the four controls stack into three rows. w-max sizes
               the row to its contents, and the -translate centres it. */}
-          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex w-max items-center justify-center gap-2 md:gap-4">
+          <div className="absolute bottom-[max(1.5rem,env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 z-30 flex w-max items-center justify-center gap-2 md:gap-4">
             <button
               // Pointer events with capture: on a phone the finger often slides off the
               // button mid-hold, and capture keeps the key held until it is released.
@@ -1395,7 +1508,7 @@ export default function App() {
                 endHaul();
               }}
               aria-label="Hold to haul loot in, release to bank it (Space)"
-              className={`px-5 md:px-9 h-14 rounded-xl border-2 border-[#17181C] font-game text-lg tracking-widest flex items-center gap-2 transition-all cursor-pointer ${
+              className={`px-4 md:px-9 h-14 rounded-xl border-2 border-[#17181C] font-game text-lg tracking-widest flex items-center gap-2 transition-all cursor-pointer ${
                 activeKeys.haul
                   ? 'bg-[#F6C445] text-[#17181C] translate-y-[2px] shadow-[0_1px_0_#17181C]'
                   : 'bg-[#17181C] text-white hover:bg-[#24698F] shadow-[0_5px_0_#0D0E10]'
@@ -1443,7 +1556,7 @@ export default function App() {
               onPointerCancel={endDig}
               title="Dig In (B / Shift)"
               aria-label="Hold to dig into the sand and ride out the surge (B or Shift)"
-              className={`px-3 h-14 rounded-xl border-2 border-[#17181C] font-game text-base tracking-widest flex items-center gap-1 transition-all cursor-pointer ${
+              className={`px-2.5 md:px-3 h-14 rounded-xl border-2 border-[#17181C] font-game text-base tracking-widest flex items-center gap-1 transition-all cursor-pointer ${
                 activeKeys.burrow || burrowed
                   ? 'bg-[#F6C445] text-[#17181C] translate-y-[2px] shadow-[0_1px_0_#17181C]'
                   : 'bg-[#FDFBF7] text-[#17181C] hover:bg-[#EAD7B0] shadow-[0_4px_0_#17181C]'
@@ -1455,7 +1568,7 @@ export default function App() {
           </div>
 
           {/* Pause. The game pauses itself when the tab goes away, so this card is
-              mostly reached for deliberately — to answer a message mid-run. */}
+              mostly reached for deliberately, to answer a message mid-run. */}
           {paused && (
             <div className="absolute inset-0 z-40 bg-[#D4E6F4]/75 backdrop-blur-[2px] flex flex-col items-center justify-center pointer-events-auto">
               <span className="font-game text-4xl md:text-5xl text-[#17181C] tracking-widest mb-2">
@@ -1473,7 +1586,7 @@ export default function App() {
                 RESUME
               </button>
               <span className="mt-5 text-[10px] font-black text-[#17181C]/45 uppercase tracking-widest text-center px-6">
-                ESC or P to pause · switching tabs pauses for you
+                {isTouch ? 'switching tabs pauses for you' : 'ESC or P to pause · switching tabs pauses for you'}
               </span>
             </div>
           )}
@@ -1489,7 +1602,7 @@ export default function App() {
           <div
             // Capped to the viewport and scrollable inside: the guide now carries a
             // card for digging in and a price list, and on a phone it grew past the
-            // screen — clipping the first card and putting GOT IT out of reach.
+            // screen, clipping the first card and putting GOT IT out of reach.
             className="bg-[#FDFBF7] border-3 border-[#17181C] rounded-3xl max-w-sm w-full max-h-[92dvh] overflow-y-auto overscroll-contain p-6 shadow-[0_8px_0_#17181C] relative"
             onClick={e => e.stopPropagation()}
           >
@@ -1510,7 +1623,7 @@ export default function App() {
                 <div>
                   <span className="font-game text-sm text-[#17181C] block">MOVE</span>
                   <span className="text-xs text-[#17181C]/85 font-bold">
-                    Hold [A] / [D], the arrow keys, or the buttons on screen.
+                    {isTouch ? 'Hold the ◀ and ▶ buttons to walk the shore.' : 'Hold [A] / [D], the arrow keys, or the buttons on screen.'}
                   </span>
                 </div>
               </div>
@@ -1520,7 +1633,7 @@ export default function App() {
                 <div>
                   <span className="font-game text-sm text-[#17181C] block">HAUL</span>
                   <span className="text-xs text-[#17181C]/85 font-bold">
-                    Hold [SPACE] or Click to vacuum loot.
+                    {isTouch ? 'Hold the HAUL button to vacuum loot.' : 'Hold [SPACE] or Click to vacuum loot.'}
                   </span>
                 </div>
               </div>
@@ -1551,8 +1664,8 @@ export default function App() {
                 <div>
                   <span className="font-game text-sm text-[#17181C] block">DIG IN</span>
                   <span className="text-xs text-[#17181C]/85 font-bold">
-                    Hold [B] or [SHIFT], or hold the DIG button, to bury yourself. The surge rolls
-                    over you and costs nothing — but everything in your claws spills onto the sand
+                    {isTouch ? 'Hold the DIG button to bury yourself. The surge rolls' : 'Hold [B] or [SHIFT], or hold the DIG button, to bury yourself. The surge rolls'}
+                    over you and costs nothing, but everything in your claws spills onto the sand
                     and the water takes it. You cannot move or haul while you are under.
                   </span>
                 </div>
@@ -1597,7 +1710,7 @@ export default function App() {
                   </span>
                 </div>
                 <span className="text-[11px] font-bold text-[#17181C]/70 block mt-1.5">
-                  Base values — your tide multiplies them, and the further up the shore you pull a
+                  Base values. Your tide multiplies them, and the further up the shore you pull a
                   piece from, the more it pays.
                 </span>
               </div>
@@ -1616,9 +1729,9 @@ export default function App() {
         </div>
       )}
 
-      {/* 5. LOW-POLY END-OF-RUN SCREEN — the season's result, win or loss */}
+      {/* 5. LOW-POLY END-OF-RUN SCREEN: the season's result, win or loss */}
       {(appState === 'DEAD' || appState === 'WIN') && (
-        <div className="absolute inset-0 bg-[#D4E6F4]/92 backdrop-blur-sm flex flex-col items-center justify-center z-50 pointer-events-auto p-5 md:p-6">
+        <div className="absolute inset-0 bg-[#D4E6F4]/92 backdrop-blur-sm flex flex-col items-center justify-center z-50 pointer-events-auto overflow-y-auto p-5 pt-[max(1.25rem,env(safe-area-inset-top))] pb-[max(1.25rem,env(safe-area-inset-bottom))] md:p-6">
           <WracklineLogo size="sm" showTitle={false} className="mb-3 md:mb-4" />
 
           {/* The headline names the cause: survived the season, or caught by a surge */}
@@ -1632,7 +1745,7 @@ export default function App() {
           </p>
 
           {/* Low-Poly Faceted Scorecard */}
-          <div className="bg-[#FDFBF7] border-3 border-[#17181C] rounded-3xl shadow-[0_8px_0_#17181C] w-76 flex flex-col items-center p-6 md:p-7 mb-7 md:mb-9">
+          <div className="bg-[#FDFBF7] border-3 border-[#17181C] rounded-3xl shadow-[0_8px_0_#17181C] w-76 max-w-full flex flex-col items-center p-6 md:p-7 mb-7 md:mb-9">
             <span className="text-xs font-black text-[#17181C]/60 uppercase tracking-widest mb-2">
               FINAL SCORE
             </span>
@@ -1664,7 +1777,7 @@ export default function App() {
             {endCause === 'SURVIVED' && (
               <button
                 onClick={() => startGame(selectedDiff.name === 'CALM' ? DIFFS.SURF : DIFFS.STORM)}
-                className="px-7 py-3.5 rounded-2xl bg-[#F6C445] hover:bg-[#EAD7B0] text-[#17181C] font-game text-xl tracking-wider border-2 border-[#17181C] shadow-[0_5px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] transition-all cursor-pointer"
+                className="px-5 py-3 md:px-7 md:py-3.5 rounded-2xl bg-[#F6C445] hover:bg-[#EAD7B0] text-[#17181C] font-game text-lg md:text-xl tracking-wider border-2 border-[#17181C] shadow-[0_5px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] transition-all cursor-pointer"
               >
                 HARDER TIDE
               </button>
@@ -1672,21 +1785,28 @@ export default function App() {
 
             <button
               onClick={() => startGame(selectedDiff)}
-              className="px-8 py-3.5 rounded-2xl bg-[#17181C] hover:bg-[#24698F] text-[#FFFDF8] font-game text-xl tracking-wider border-2 border-[#17181C] shadow-[0_5px_0_#0D0E10] active:translate-y-[2px] active:shadow-[0_1px_0_#0D0E10] transition-all cursor-pointer"
+              className="px-6 py-3 md:px-8 md:py-3.5 rounded-2xl bg-[#17181C] hover:bg-[#24698F] text-[#FFFDF8] font-game text-lg md:text-xl tracking-wider border-2 border-[#17181C] shadow-[0_5px_0_#0D0E10] active:translate-y-[2px] active:shadow-[0_1px_0_#0D0E10] transition-all cursor-pointer"
             >
               PLAY AGAIN
             </button>
 
             <button
               onClick={() => setAppState('TITLE')}
-              className="px-6 py-3.5 rounded-2xl bg-[#FDFBF7] hover:bg-[#EAD7B0] text-[#17181C] font-game text-xl tracking-wider border-2 border-[#17181C] shadow-[0_5px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] transition-all cursor-pointer"
+              className="px-5 py-3 md:px-6 md:py-3.5 rounded-2xl bg-[#FDFBF7] hover:bg-[#EAD7B0] text-[#17181C] font-game text-lg md:text-xl tracking-wider border-2 border-[#17181C] shadow-[0_5px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] transition-all cursor-pointer"
             >
               MENU
+            </button>
+
+            <button
+              onClick={shareResult}
+              className="px-5 py-3 md:px-6 md:py-3.5 rounded-2xl bg-[#FDFBF7] hover:bg-[#EAD7B0] text-[#17181C] font-game text-lg md:text-xl tracking-wider border-2 border-[#17181C] shadow-[0_5px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] transition-all cursor-pointer"
+            >
+              {shareNote || 'SHARE'}
             </button>
           </div>
 
           <p className="mt-5 text-[10px] font-black text-[#17181C]/45 uppercase tracking-widest">
-            Press R to go again
+            {isTouch ? 'Tap PLAY AGAIN for another run' : 'Press R to go again'}
           </p>
         </div>
       )}

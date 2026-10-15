@@ -225,6 +225,15 @@ export class Wrackline3D {
   sunGroup!: THREE.Group;
   skyDome!: THREE.Mesh;
 
+  // Season gloom. The base colours are cached at construction so the tint is always
+  // recomputed from a clean source: lerping onto the live colour every frame would
+  // compound and the shore would fade to slate within a few seconds.
+  fogBaseColor!: THREE.Color;
+  fogBaseDensity = 0.0048;
+  bgBaseColor!: THREE.Color;
+  skyBaseColor!: THREE.Color;
+  gloomColor = new THREE.Color(0x6E7C8A);
+
   // Low-Poly Wave Breaker Surge (swell body, breaking lip, water sheet, whitewater)
   waveGroup: THREE.Group;
   waveSwellMesh!: THREE.Mesh;
@@ -308,6 +317,9 @@ export class Wrackline3D {
     // Lighter haze than the old 0.009: that density greyed the whole shore out,
     // so the beach went pale and featureless as the player walked up it.
     this.scene.fog = new THREE.FogExp2(0xC6E2F4, 0.0048);
+    this.bgBaseColor = (this.scene.background as THREE.Color).clone();
+    this.fogBaseColor = (this.scene.fog as THREE.FogExp2).color.clone();
+    this.fogBaseDensity = (this.scene.fog as THREE.FogExp2).density;
 
     // 2. Camera Setup
     const aspect = container.clientWidth / container.clientHeight;
@@ -508,6 +520,7 @@ export class Wrackline3D {
       side: THREE.BackSide,
       fog: false
     });
+    this.skyBaseColor = skyMat.color.clone();
     this.skyDome = new THREE.Mesh(skyGeo, skyMat);
     this.skyDome.position.set(0, -20, 0);
     this.scene.add(this.skyDome);
@@ -776,7 +789,7 @@ export class Wrackline3D {
   }
 
   // 4.4b A single piece of natural shore wrack. Everything the tide leaves behind
-  //      is a tangle, a branch, a shell or a stone — never a stamped cylinder.
+  //      is a tangle, a branch, a shell or a stone, never a stamped cylinder.
   createWrackPiece(): THREE.Object3D {
     const piece = new THREE.Group();
     const roll = Math.random();
@@ -1377,7 +1390,8 @@ export class Wrackline3D {
     isMoving: boolean = false,
     moveDir: number = 0,
     burrowAmount: number = 0,
-    waveDrawdown: number = 0
+    waveDrawdown: number = 0,
+    seasonRatio: number = 0
   ) {
     if (this.isDisposed) return;
     this.oceanTime += dt;
@@ -1399,6 +1413,28 @@ export class Wrackline3D {
     if (this.sunCorona && this.sunCoronaMat) {
       this.sunCorona.scale.setScalar(1 + Math.sin(this.oceanTime * 0.8) * 0.06);
       this.sunCoronaMat.opacity = 0.3 + Math.sin(this.oceanTime * 0.55) * 0.09;
+    }
+
+    // 9.005 Season gloom. The sky, the haze, the far colour and the sun all lean toward
+    // storm slate as the waves run out, so BLACK TIDE reads as a black tide instead of
+    // the same blue sky under different text. It has to be applied here, inside the
+    // update: the corona's opacity is written three lines above, every frame, so a gloom
+    // set from outside would be overwritten before it was ever seen. A King Tide pushes
+    // its own wave a little darker on top, which is what the flag was always for.
+    const gloom = Math.min(1, Math.max(0, seasonRatio + (isKingTide ? 0.18 : 0)));
+    if (this.skyDome && this.scene.fog && this.scene.background) {
+      const fog = this.scene.fog as THREE.FogExp2;
+      fog.color.copy(this.fogBaseColor).lerp(this.gloomColor, gloom * 0.6);
+      fog.density = this.fogBaseDensity * (1 + gloom * 0.4);
+      (this.scene.background as THREE.Color)
+        .copy(this.bgBaseColor)
+        .lerp(this.gloomColor, gloom * 0.6);
+      (this.skyDome.material as THREE.MeshBasicMaterial).color
+        .copy(this.skyBaseColor)
+        .lerp(this.gloomColor, gloom * 0.7);
+      if (this.sunCoronaMat) {
+        this.sunCoronaMat.opacity *= 1 - gloom * 0.7;
+      }
     }
 
     // 9.1 Animate Low-Poly Ocean Vertices

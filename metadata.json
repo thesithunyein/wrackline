@@ -1,6 +1,0 @@
-{
-  "name": "WRACKLINE",
-  "description": "A risograph-styled seaside arcade game of tide timing and loot hauling.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}
