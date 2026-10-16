@@ -69,8 +69,8 @@ the shore the wrack floats, and the wave carries it: the breaker pushes it up th
 in and drags it back out as it leaves. A piece you could not reach in the low tide can therefore be
 lifted straight off the moving water for **1.75x** its worth, and the grab says `SURGE`. What it
 costs is the old rule, unchanged: a surge that catches you holding takes a heart, and while it has
-you the water claws pieces back off your back about twice a second. The bonus is what that risk
-buys, not free money.
+you the water claws pieces back off your back, about one and a half pieces a second. The bonus is
+what that risk buys, not free money.
 
 ### Tides
 
@@ -111,8 +111,8 @@ thirteen is genuinely the tightest wave in the run.
   while the surge is on the shore and the wave carries wrack to your claws for **1.75x**, so the
   pieces left stranded up at the waterline come to you instead of going back out with the tide.
 
-Get caught holding loot and the surge claws it off your back, about twice a second, and you lose a
-heart. Lose the last one and the wave takes you.
+Get caught holding loot and the surge claws it off your back, about one and a half pieces a second,
+and you lose a heart. Lose the last one and the wave takes you.
 
 ## How it works
 
@@ -257,8 +257,11 @@ index.html          shell, fonts, tab icon
 src/main.tsx        entry
 src/App.tsx         game state, HUD, input, the frame loop
 src/game3d.ts       Three.js world: terrain, ocean, breaker, scenery, creature, particles
-src/Logo.tsx        the badge mark and wordmark
 src/audio.ts        procedural Web Audio
+src/Logo.tsx        the badge mark and wordmark
+src/logoMark.ts     the mark's shapes, shared by the logo and the share card
+src/shareCard.ts    the 1080x1350 score card, drawn on a canvas
+src/index.css       the Tailwind entry, with the build output kept out of its scan
 docs/logo.svg       the mark on its own, for READMEs and press
 public/og.png       social card
 ```

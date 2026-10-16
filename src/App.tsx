@@ -109,9 +109,10 @@ const SURGE_CARRY_INLAND = 9.0;
 // them: it delivered 935 a hand off the edge of the reach in one run.
 const SURGE_CARRY_SEA = 4.0;
 const SURGE_FLOAT_LIFT = 0.55;
-// The water claws a piece back twice a second, where it used to strip one every
-// 0.125 seconds. Eight a second is faster than anyone can haul, which is what made the
-// surge untakeable; this rate leaves a quick pair of claws something to win.
+// The water claws on a tick: every 0.4 seconds it reaches, and lands a little over half
+// the time, so the haul bleeds at about 1.4 pieces a second rather than the one every
+// 0.125 seconds it used to strip. Eight a second is faster than anyone can haul, which is
+// what made the surge untakeable; this rate leaves a quick pair of claws something to win.
 const SURGE_TEAR_INTERVAL = 0.4;
 const SURGE_TEAR_CHANCE = 0.55;
 // The band of beach the tide leaves its wrack on. Measured against the terrain: x = 14
