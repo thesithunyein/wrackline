@@ -16,6 +16,7 @@ import {
 } from './audio';
 import { Wrackline3D, Loot3DItem, groundHeightAt, waterSurfaceY } from './game3d';
 import { WracklineLogo } from './Logo';
+import { buildShareCard, sanitizeName, shareFileName, ShareCardData } from './shareCard';
 
 interface DiffConfig {
   name: string;
@@ -80,6 +81,10 @@ const DIG_IN_TIME = 0.3;
 // Banking in the last breath of the warning, before the surge lands on the shore.
 // Rate-limited to once per wave on purpose: if every bank paid the bonus the score would
 // inflate and the greed decision the whole game rests on would stop meaning anything.
+// Where the player's name for the share card lives. The score is already kept in
+// localStorage, so the name joins it there: same device, same lifetime, no account.
+const SHARE_NAME_KEY = 'wrackline_name';
+
 const NEAR_MISS_WINDOW = 0.45;
 const NEAR_MISS_BONUS = 1.5;
 // A short slow-motion beat sells the escape. The clock is scaled in exactly one place.
@@ -239,6 +244,18 @@ export default function App() {
   });
   const [showInputCue, setShowInputCue] = useState<boolean>(true);
   const [shareNote, setShareNote] = useState<string>('');
+  // The name on the share card. Asked once, kept on the device, never sent anywhere:
+  // there is no server to send it to.
+  const [playerName, setPlayerName] = useState<string>(() => {
+    try {
+      return localStorage.getItem(SHARE_NAME_KEY) || '';
+    } catch {
+      return '';
+    }
+  });
+  const [askName, setAskName] = useState<boolean>(false);
+  const [nameDraft, setNameDraft] = useState<string>('');
+  const [cardState, setCardState] = useState<'IDLE' | 'WORKING' | 'SAVED' | 'FAILED'>('IDLE');
 
   // Active key state for UI visual feedback on buttons
   const [activeKeys, setActiveKeys] = useState({
@@ -603,6 +620,8 @@ export default function App() {
     setHeldScore(0);
     setIsNewBest(false);
     setIsKingTide(false);
+    setCardState('IDLE');
+    setShareNote('');
     setIsWaveWarning(false);
     setHearts(diff.hearts);
     setHurtFlash(false);
@@ -825,6 +844,11 @@ export default function App() {
   // Keyboard Shortcuts (Intuitive WASD, Arrows, Space, 1, 2, 3, H, M, F)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // While the name prompt is open the keyboard belongs to it: without this, Enter in
+      // the field would submit the form and restart the run behind it at the same time.
+      const target = e.target as HTMLElement | null;
+      if (askName || target?.tagName === 'INPUT') return;
+
       initAudio();
       const code = e.code;
       const key = e.key;
@@ -925,7 +949,7 @@ export default function App() {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [startHaul, endHaul, toggleFullscreen, startGame, startDig, endDig, togglePause]);
+  }, [startHaul, endHaul, toggleFullscreen, startGame, startDig, endDig, togglePause, askName]);
 
   // Main 60FPS Game Loop
   useEffect(() => {
@@ -1268,18 +1292,105 @@ export default function App() {
     const url = 'https://wrackline.vercel.app';
     const text = `${headline} · ${selectedDiff.name} tide`;
 
+    // Clipboard first, share sheet second. The sheet is the nicer gesture on a phone, but
+    // on a desktop it is a native dialog that can simply sit there, and this path only runs
+    // when the card could not be saved, so it should not be able to stall too.
     try {
-      if (typeof navigator !== 'undefined' && navigator.share) {
-        await navigator.share({ title: 'WRACKLINE', text, url });
-      } else if (typeof navigator !== 'undefined' && navigator.clipboard) {
+      if (typeof navigator !== 'undefined' && navigator.clipboard) {
         await navigator.clipboard.writeText(`${text}\n${url}`);
         setShareNote('COPIED');
         window.setTimeout(() => setShareNote(''), 1600);
+        return;
+      }
+    } catch {
+      // A refused clipboard falls through to the share sheet rather than giving up.
+    }
+
+    try {
+      if (typeof navigator !== 'undefined' && navigator.share) {
+        await navigator.share({ title: 'WRACKLINE', text, url });
       }
     } catch {
       // A dismissed share sheet is not a failure worth showing anyone.
     }
   }, [endCause, wavesSurvived, bankedScore, selectedDiff]);
+
+  // The share button draws the card, writes the record and the name onto it, and saves it.
+  //
+  // The download is the action, deliberately. Handing the file to navigator.share is not
+  // the same thing as saving it: the sheet gives the picture to another app, it can be
+  // dismissed, and on a desktop that advertises file support it is a native dialog that
+  // never hands anything back. The button promises a picture of your run; a file on disk
+  // is that promise kept, on every platform, with no dialog in the way.
+  const saveShareCard = useCallback(
+    async (name: string) => {
+      setCardState('WORKING');
+      setShareNote('');
+      const data: ShareCardData = {
+        name,
+        best: bestScore,
+        score: bankedScore,
+        wave: wavesSurvived,
+        season: SEASON_WAVES,
+        tide: selectedDiff.name,
+        survived: endCause === 'SURVIVED',
+        isNewBest,
+        url: 'https://wrackline.vercel.app'
+      };
+
+      try {
+        const blob = await buildShareCard(data);
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = shareFileName(data);
+        link.rel = 'noopener';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        // Revoked on a later turn, not this one: a download that starts and then has
+        // its blob pulled out from under it is a truncated file.
+        window.setTimeout(() => URL.revokeObjectURL(url), 10000);
+        setCardState('SAVED');
+        setShareNote('IMAGE SAVED');
+      } catch (err) {
+        // A card that cannot be drawn or saved still leaves the run shareable as text.
+        console.error('WRACKLINE could not save the share card', err);
+        setCardState('FAILED');
+        void shareResult();
+      }
+      window.setTimeout(() => setShareNote(''), 2600);
+    },
+    [bestScore, bankedScore, wavesSurvived, selectedDiff, endCause, isNewBest, shareResult]
+  );
+
+  // Share asks who is hauling the first time, and only the first time.
+  const handleShare = useCallback(() => {
+    if (!playerName) {
+      setNameDraft('');
+      setAskName(true);
+      return;
+    }
+    void saveShareCard(playerName);
+  }, [playerName, saveShareCard]);
+
+  const submitName = useCallback(
+    (event: React.FormEvent) => {
+      event.preventDefault();
+      const clean = sanitizeName(nameDraft);
+      setPlayerName(clean);
+      try {
+        localStorage.setItem(SHARE_NAME_KEY, clean);
+      } catch {
+        // Storage being unavailable costs the player the name next session, nothing else.
+      }
+      setAskName(false);
+      void saveShareCard(clean);
+    },
+    [nameDraft, saveShareCard]
+  );
+
+  // Everything above is the fallback path: a card that cannot be drawn still shares as text.
 
   return (
     <div className="relative w-full app-shell overflow-hidden select-none bg-[#D4E6F4] flex items-center justify-center font-ui">
@@ -1920,16 +2031,79 @@ export default function App() {
             </button>
 
             <button
-              onClick={shareResult}
+              onClick={handleShare}
+              aria-label="Save a share card of this run"
               className="px-5 py-3 md:px-6 md:py-3.5 rounded-2xl bg-[#FDFBF7] hover:bg-[#EAD7B0] text-[#17181C] font-game text-lg md:text-xl tracking-wider border-2 border-[#17181C] shadow-[0_5px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] transition-all cursor-pointer"
             >
-              {shareNote || 'SHARE'}
+              {cardState === 'WORKING' ? 'MAKING CARD...' : shareNote || 'SHARE'}
             </button>
           </div>
 
-          <p className="mt-5 text-[10px] font-black text-[#17181C]/45 uppercase tracking-widest">
+          {/* Who the card is signed by, so the name is visible before it is asked for. */}
+          <p className="mt-4 text-[10px] font-black text-[#17181C]/45 uppercase tracking-widest text-center max-w-xs">
+            {playerName ? (
+              <>
+                the card signs as{' '}
+                <button
+                  onClick={() => {
+                    setNameDraft(playerName);
+                    setAskName(true);
+                  }}
+                  aria-label="Change the name on your share card"
+                  className="underline decoration-dotted underline-offset-2 cursor-pointer text-[#24698F]"
+                >
+                  {playerName}
+                </button>
+              </>
+            ) : (
+              'share asks for a name the first time, and keeps it on this device'
+            )}
+          </p>
+
+          <p className="mt-3 text-[10px] font-black text-[#17181C]/45 uppercase tracking-widest">
             {isTouch ? 'Tap PLAY AGAIN for another run' : 'Press R to go again'}
           </p>
+        </div>
+      )}
+
+      {/* The name prompt comes before the card, not after it: the card is signed, so
+          asking afterwards would mean drawing it twice. */}
+      {askName && (
+        <div className="absolute inset-0 z-[60] bg-[#17181C]/50 backdrop-blur-xs flex items-center justify-center p-4 pointer-events-auto">
+          <form
+            onSubmit={submitName}
+            className="bg-[#FDFBF7] border-3 border-[#17181C] rounded-3xl max-w-sm w-full p-6 shadow-[0_8px_0_#17181C]"
+          >
+            <h3 className="font-game text-2xl text-[#17181C] tracking-wide mb-2">
+              WHO IS HAULING?
+            </h3>
+            <p className="text-xs font-bold text-[#17181C]/70 mb-4">
+              Your name goes on the card. It stays on this device, like your best score:
+              no account, no server.
+            </p>
+            <input
+              autoFocus
+              value={nameDraft}
+              onChange={e => setNameDraft(e.target.value)}
+              maxLength={16}
+              placeholder="SCUTTLER"
+              aria-label="Name to sign your share card with"
+              className="w-full px-4 py-3 rounded-xl bg-[#EAD7B0]/40 border-2 border-[#17181C] font-game text-lg tracking-widest uppercase text-[#17181C] placeholder:text-[#17181C]/35 mb-4"
+            />
+            <button
+              type="submit"
+              className="w-full py-3 rounded-xl bg-[#24698F] hover:bg-[#1B5575] text-white font-game text-base tracking-wider border-2 border-[#17181C] shadow-[0_4px_0_#17181C] active:translate-y-[2px] active:shadow-none transition-all cursor-pointer mb-2"
+            >
+              MAKE MY CARD
+            </button>
+            <button
+              type="button"
+              onClick={() => setAskName(false)}
+              className="w-full py-2.5 rounded-xl bg-[#FDFBF7] hover:bg-[#EAD7B0] text-[#17181C] font-game text-sm tracking-wider border-2 border-[#17181C] shadow-[0_3px_0_#17181C] active:translate-y-[2px] active:shadow-none transition-all cursor-pointer"
+            >
+              NOT NOW
+            </button>
+          </form>
         </div>
       )}
     </div>

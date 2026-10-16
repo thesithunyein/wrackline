@@ -183,7 +183,7 @@ flowchart TD
   Engine -->|"draw"| Canvas["WebGL canvas"]
   App -->|"crunch, thock, rumble"| Audio["audio.ts<br/>a Web Audio graph built at runtime"]
   Audio --> Speakers["Sound"]
-  App -->|"best score"| Store["localStorage<br/>wrackline_best"]
+  App -->|"best score, card name"| Store["localStorage<br/>wrackline_best, wrackline_name"]
   Engine -.->|"groundHeightAt x, z"| App
 ```
 
@@ -203,6 +203,15 @@ flowchart TD
   of reading as a separate slab sliding over dry sand.
 - **Greed is drawn, not just counted.** The shell visibly swells with the value riding on it, and
   that swell is read back as a hitbox, so a fat scuttler really is easier to catch than a lean one.
+- **The share card is drawn, not screenshotted.** `src/shareCard.ts` paints a 1080x1350 PNG of the
+  run on a canvas: the mark, the name, the record, and the season's result. The mark's shapes live
+  in `src/logoMark.ts` so the card and the in-page logo cannot drift apart, and the whole thing is
+  rasterised on the device, which is why there is no image endpoint and nothing to upload.
+- **SHARE saves a file, and asks for a name only once.** The first press on a device with no name
+  stored opens a prompt and keeps the answer in `localStorage`, so later presses save straight
+  away; the picture lands in Downloads as `wrackline-<name>-<best>.png`. The save is an anchor
+  download rather than `navigator.share` on purpose: handing the file to a share sheet gives it to
+  another app, and a sheet that is dismissed or that never resolves has not saved anything.
 - **Every ending has a cause.** A run ends because hearts ran out or because thirteen waves were
   survived, and the end screen names which one.
 
@@ -227,7 +236,8 @@ vercel deploy --prod        # from a directory holding index.html + assets/
 ```
 
 Nothing at runtime is server-side: no API keys, no environment variables, no database. Clearing
-site data is the only way to reset your best score, because that score is yours alone.
+site data is the only way to reset your best score and the name that signs your share card,
+because both are yours alone.
 
 ## How it is built
 

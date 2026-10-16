@@ -6,8 +6,11 @@ WRACKLINE is a static client-side game. There is no server, no API, no database,
 account and no analytics. The build is HTML, CSS, JavaScript and one PNG, served from a CDN.
 Nothing you do in the game leaves your browser, other than the fonts fetched from Google Fonts.
 
-The only thing the game stores is your best score, in `localStorage` under the key
-`wrackline_best`. Clearing site data erases it.
+The only things the game stores are your best score and, if you make a share card, the name
+you sign it with. They live in `localStorage` under the keys `wrackline_best` and
+`wrackline_name`, and they are never sent anywhere: the share card is drawn in the browser,
+and a name only leaves the device inside the image you save and then choose to share yourself.
+Clearing site data erases both.
 
 ## What is in scope
 
@@ -23,7 +26,8 @@ Most of the usual web attack surface does not exist here. Reports that are genui
 
 - **The score can be edited.** It is stored in `localStorage`, so a player can give themselves
   any best score they like. That is known, and it is fine: there is no leaderboard, and nothing
-  to win except your own number.
+  to win except your own number. The same goes for the name on a share card, which is drawn
+  as typed and is nobody's identity but the player's own claim.
 - Missing hardening headers on a page that serves no user content and holds no session.
 
 ## Reporting
