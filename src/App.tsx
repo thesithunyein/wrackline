@@ -1357,20 +1357,20 @@ export default function App() {
           </div>
 
           {/* Bottom Zone: Instant Guide - Immediately Explains What Game Is For.
-              Each line already names the control it needs, so the numbers that used
-              to lead these four were a second, weaker index of the same thing: they
-              told you nothing the words did not, and they made a game with four verbs
-              read like a manual. The words carry the order on their own. */}
+              Four verbs, and nothing else: SCUTTLE, HAUL, BANK, DIG IN. The 01 to 04
+              index and the bracketed key names that used to lead these lines were a
+              keymap inside the game, which is the one place a keymap is not needed,
+              because the controls are already on screen as buttons. Both made four
+              verbs read like a manual. The guide (?) still lists every control, and
+              the first run still names the keys once, when they are worth knowing. */}
           <div className="shrink-0 w-full max-w-xs md:w-auto md:max-w-none grid grid-cols-2 gap-x-4 gap-y-2.5 md:flex md:flex-wrap md:items-center md:justify-center md:gap-7 bg-[#FDFBF7]/90 backdrop-blur-xs border-2 border-[#17181C] px-5 py-3.5 md:px-6 md:py-3 rounded-2xl shadow-[0_4px_0_#17181C] text-[11px] md:text-xs font-bold text-[#17181C]">
-            <span>{isTouch ? 'SCUTTLE ◀ ▶' : 'SCUTTLE [A / D]'}</span>
+            <span>SCUTTLE</span>
             <span className="text-[#17181C]/25 hidden md:inline">|</span>
-            <span>{isTouch ? 'HOLD TO HAUL' : 'HAUL [SPACE]'}</span>
+            <span>HAUL</span>
             <span className="text-[#17181C]/25 hidden md:inline">|</span>
             <span className="col-span-2 md:col-auto">BANK BEFORE THE SURGE</span>
             <span className="text-[#17181C]/25 hidden md:inline">|</span>
-            <span className="col-span-2 md:col-auto">
-              {isTouch ? 'DIG IN TO RIDE IT OUT' : 'DIG IN [B] TO RIDE IT OUT'}
-            </span>
+            <span className="col-span-2 md:col-auto">DIG IN TO RIDE IT OUT</span>
           </div>
         </div>
       )}
