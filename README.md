@@ -60,6 +60,7 @@ stand to bank, and the more the surge can tear off your back.
 | **Bank** | Release `Space` | The haul is stowed and safe. It counts immediately. |
 | **Dig in** | Hold `B` or `Shift` | Burrow under the sand. The surge passes over you, and it takes everything you were holding. A 0.3 second wind-up makes it a commitment rather than a reflex. |
 | **Pick the tide** | `1` / `2` / `3` on the title screen | Calm, Surf or Storm. |
+| **Share** | `SHARE` on the end screen | Saves a 1080x1350 PNG of the run: the mark, your name, and your best score. Asks for the name once, then remembers it. |
 
 Walking is not the risk. Holding is. Releasing your haul the instant the water arrives is the
 difference between a good wave and a lost one.
