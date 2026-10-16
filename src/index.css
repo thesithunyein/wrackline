@@ -1,1 +1,9 @@
 @import "tailwindcss";
+
+/* Tailwind finds class names by scanning the project, and a build output sitting in the tree is
+   a trap: a previous bundle is full of class-like strings ("transition", "inline-block") that no
+   element uses, so the stylesheet sprouts rules nothing can match, and which ones sprout depends
+   on what happens to be in the build directory at the time. The source of truth is the source. */
+@source not "../dist";
+@source not "../.vercel";
+
