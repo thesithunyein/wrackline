@@ -1356,27 +1356,21 @@ export default function App() {
             </div>
           </div>
 
-          {/* Bottom Zone: 3-Step Instant Guide - Immediately Explains What Game Is For */}
+          {/* Bottom Zone: Instant Guide - Immediately Explains What Game Is For.
+              Each line already names the control it needs, so the numbers that used
+              to lead these four were a second, weaker index of the same thing: they
+              told you nothing the words did not, and they made a game with four verbs
+              read like a manual. The words carry the order on their own. */}
           <div className="shrink-0 w-full max-w-xs md:w-auto md:max-w-none grid grid-cols-2 gap-x-4 gap-y-2.5 md:flex md:flex-wrap md:items-center md:justify-center md:gap-7 bg-[#FDFBF7]/90 backdrop-blur-xs border-2 border-[#17181C] px-5 py-3.5 md:px-6 md:py-3 rounded-2xl shadow-[0_4px_0_#17181C] text-[11px] md:text-xs font-bold text-[#17181C]">
-            <div className="flex items-center gap-1.5">
-              <span className="font-game text-sm text-[#24698F]">01</span>
-              <span>{isTouch ? 'SCUTTLE ◀ ▶' : 'SCUTTLE [A / D]'}</span>
-            </div>
+            <span>{isTouch ? 'SCUTTLE ◀ ▶' : 'SCUTTLE [A / D]'}</span>
             <span className="text-[#17181C]/25 hidden md:inline">|</span>
-            <div className="flex items-center gap-1.5">
-              <span className="font-game text-sm text-[#24698F]">02</span>
-              <span>{isTouch ? 'HOLD TO HAUL' : 'HAUL [SPACE]'}</span>
-            </div>
+            <span>{isTouch ? 'HOLD TO HAUL' : 'HAUL [SPACE]'}</span>
             <span className="text-[#17181C]/25 hidden md:inline">|</span>
-            <div className="col-span-2 md:col-auto flex items-center gap-1.5">
-              <span className="font-game text-sm text-[#E25B45]">03</span>
-              <span>BANK BEFORE THE SURGE</span>
-            </div>
+            <span className="col-span-2 md:col-auto">BANK BEFORE THE SURGE</span>
             <span className="text-[#17181C]/25 hidden md:inline">|</span>
-            <div className="col-span-2 md:col-auto flex items-center gap-1.5">
-              <span className="font-game text-sm text-[#F6C445]">04</span>
-              <span>{isTouch ? 'DIG IN TO RIDE IT OUT' : 'DIG IN [B] TO RIDE IT OUT'}</span>
-            </div>
+            <span className="col-span-2 md:col-auto">
+              {isTouch ? 'DIG IN TO RIDE IT OUT' : 'DIG IN [B] TO RIDE IT OUT'}
+            </span>
           </div>
         </div>
       )}
