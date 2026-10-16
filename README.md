@@ -231,8 +231,8 @@ npm run lint                     # tsc --noEmit
 The game is a static bundle, so any static host works. It is currently on Vercel:
 
 ```bash
-npm run build
-vercel deploy --prod        # from a directory holding index.html + assets/
+npm run build                              # check it locally first
+vercel deploy --prod --project wrackline   # Vercel runs the same build and serves dist/
 ```
 
 Nothing at runtime is server-side: no API keys, no environment variables, no database. Clearing
