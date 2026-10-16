@@ -95,7 +95,14 @@ const NEAR_MISS_SLOW_FRAMES = 10;
 // torn off again before it could be banked.
 const SURGE_GRAB_BONUS = 1.75;
 const SURGE_CARRY_INLAND = 9.0;
-const SURGE_CARRY_SEA = 7.0;
+// Measured against the real loop: with the drag at 7.0 a wave moved the wrack 2.4
+// units inland through the sweep and then took 1.6 of it back out on the retreat, so
+// the tide shuttled the wrack back and forth rather than delivering it. At 4.0 the
+// sweep still carries 1.9 inland and the retreat takes 0.8 of it back, so a wave nets
+// about a unit of real inland progress, and with the claws' reach capped that drag is
+// what carries wrack in to a player standing out at the waterline instead of past
+// them: it delivered 935 a hand off the edge of the reach in one run.
+const SURGE_CARRY_SEA = 4.0;
 const SURGE_FLOAT_LIFT = 0.55;
 // The water claws a piece back twice a second, where it used to strip one every
 // 0.125 seconds. Eight a second is faster than anyone can haul, which is what made the
@@ -109,6 +116,15 @@ const WRACK_NEAR_X = 1.5;
 const WRACK_FAR_X = 14;
 // Where the wash stops on its way up the shore, just behind the player's start.
 const SURGE_STOP_X = -0.5;
+
+// How far the claws reach. The wrack lands across a band 12.5 units wide
+// (WRACK_NEAR_X to WRACK_FAR_X) that runs from just ahead of the player's start to
+// the waterline, and the player walks 6.8 a second. A reach of 6 covers about half
+// that band from one spot, so the near pieces can be taken where you stand and the
+// fatter seaward ones have to be walked to, which is the only thing that makes the
+// spawn values mean anything: measured, without a reach the haul took the whole band
+// from a standstill at the top of the beach in a single low tide.
+const HAUL_REACH_X = 6.0;
 
 // Named stretches of the season, so a run has rungs without a level-select screen.
 const TIERS: { from: number; name: string }[] = [
@@ -1003,6 +1019,10 @@ export default function App() {
             // Spilled loot is on the sand, not in reach: it is gone, and it is meant
             // to be seen going.
             if (!item.isAttached && !item.doomed) {
+              // Out of reach: the claws do not touch it, so it neither moves nor is
+              // taken. Walking the wrack line is the price of the far, fatter pieces.
+              if (Math.abs(item.x - s.playerX3D) > HAUL_REACH_X) continue;
+
               const pullRate = speed3D + (moveDir > 0 ? 4.5 : 0);
               item.x -= pullRate * dt;
               item.z += (0 - item.z) * Math.min(1, dt * 3.2);
@@ -1726,7 +1746,9 @@ export default function App() {
                 <div>
                   <span className="font-game text-sm text-[#17181C] block">HAUL</span>
                   <span className="text-xs text-[#17181C]/85 font-bold">
-                    {isTouch ? 'Hold the HAUL button to vacuum loot.' : 'Hold [SPACE] or Click to vacuum loot.'}
+                    {isTouch
+                      ? 'Hold the HAUL button to pull in wrack within claw reach. Walk the wrack line to take the far, fatter pieces.'
+                      : 'Hold [SPACE] or Click to pull in wrack within claw reach. Walk the wrack line to take the far, fatter pieces.'}
                   </span>
                 </div>
               </div>

@@ -92,6 +92,25 @@ export const SEA_SURFACE_Y = -2.2;
 // the surge meets the open sea.
 export const SEA_DRAWDOWN_DROP = 0.95;
 
+// The sea mesh's own x, so its swell can be damped against world coordinates rather
+// than the plane's local ones.
+export const SEA_MESH_X = 45;
+
+// Shallow water. The sea's own vertex swell is 0.94 tall at full height and the beach
+// only falls about a third of a unit per unit, so a full-height swell put the water
+// surface UNDER the ground it was meeting for several units either side of the
+// shoreline. Measured on the real terrain, that made the waterline a band rather than
+// a line: the draw uncovered a strip that breathed between 0.05 and 10.4 units wide,
+// with the water surface down to 0.94 below the sand at the waterline and 1.9 below
+// it further out, and at full draw the lowest water surface sat 0.12 under ground
+// standing at x = 28. Shallow water is calm in reality, so the swell now grows in
+// from the beach outwards: a fraction of full height where the tide meets the sand,
+// full height SEA_SWELL_FADE_WIDTH units out to sea. The waterline becomes a line and
+// the draw bares beach instead of seabed.
+const SEA_SWELL_SHALLOW = 0.12;
+const SEA_SWELL_FADE_X0 = 18; // world x where the swell starts to grow
+const SEA_SWELL_FADE_WIDTH = 14;
+
 // How far above still water the tide ever washes. The sea's own vertex swell
 // peaks near 0.94; 0.55 keeps the wet band where the water regularly reaches
 // instead of painting half the beach. Sand above this stays dry and pale.
@@ -641,7 +660,7 @@ export class Wrackline3D {
     );
 
     this.seaMesh = new THREE.Mesh(this.seaGeoNonIndexed, this.seaMat);
-    this.seaMesh.position.set(45, -2.2, 0);
+    this.seaMesh.position.set(SEA_MESH_X, SEA_SURFACE_Y, 0);
     this.seaMesh.receiveShadow = true;
     this.scene.add(this.seaMesh);
   }
@@ -1467,7 +1486,13 @@ export class Wrackline3D {
           Math.cos(z * 0.32 + t * 1.9) * 0.32 +
           Math.sin(x * 0.12 - z * 0.15 + t * 1.2) * 0.2;
 
-        pos.setY(i, initialY + wave);
+        // Shallow water: the swell is damped as the sea runs up to the beach. See the
+        // note above SEA_SWELL_SHALLOW for the measurements that motivated it.
+        const shoreward = (SEA_MESH_X + x - SEA_SWELL_FADE_X0) / SEA_SWELL_FADE_WIDTH;
+        const taper =
+          SEA_SWELL_SHALLOW + (1 - SEA_SWELL_SHALLOW) * Math.max(0, Math.min(1, shoreward));
+
+        pos.setY(i, initialY + wave * taper);
       }
       pos.needsUpdate = true;
       this.seaGeoNonIndexed.computeVertexNormals();

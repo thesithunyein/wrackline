@@ -56,7 +56,7 @@ stand to bank, and the more the surge can tear off your back.
 | Action | Keys | What it does |
 |---|---|---|
 | **Scuttle** | `A` / `D` or `←` / `→` | Walk the shore. Deeper sand holds richer wrack and a longer walk back. |
-| **Haul** | Hold `Space`, or hold the screen | Everything within reach streams into your shell. The water counts as reach: hauling while the surge is on the shore pays **1.75x**. Keep holding and your shell swells, and a swollen shell is a wider target. |
+| **Haul** | Hold `Space`, or hold the screen | Everything within claw reach, about six units of beach either side of you, streams into your shell. Everything further out stays where it lies until you scuttle over to it, which is the whole reason the far, fatter pieces are worth more. The water counts as reach: hauling while the surge is on the shore pays **1.75x**. Keep holding and your shell swells, and a swollen shell is a wider target. |
 | **Bank** | Release `Space` | The haul is stowed and safe. It counts immediately. |
 | **Dig in** | Hold `B` or `Shift` | Burrow under the sand. The surge passes over you, and it takes everything you were holding. A 0.3 second wind-up makes it a commitment rather than a reflex. |
 | **Pick the tide** | `1` / `2` / `3` on the title screen | Calm, Surf or Storm. |
@@ -78,7 +78,7 @@ buys, not free money.
 |---|---|---|---|---|---|
 | CALM | 1.0× | 7.0s | 1.8s | 4 | Long low tide, slow breaker, forgiving window |
 | SURF | 1.7× | 5.0s | 1.3s | 3 | The default. A fair fight between greed and escape |
-| STORM | 2.8× | 3.6s | 0.9s | 2 | Short low tide, fast breaker, tighter haul reach |
+| STORM | 2.8× | 3.6s | 0.9s | 2 | Short low tide, fast breaker, slower claws |
 
 ### The season
 
@@ -194,7 +194,10 @@ flowchart TD
 - **`groundHeightAt( x, z )`** is the single source of truth for where the beach surface is.
   Scenery, loot and the player are all bedded onto it, so nothing floats or sinks as the slope
   changes across the shore.
-- **The breaker is re-draped every frame.** `waveSurfaceY()` returns the waterline under the wave
+- **The sea is calm where it meets the beach.** The swell is damped over the last fourteen units of
+  shore, so the water surface is never below the sand it is meeting: the waterline is a line rather
+  than a breathing band, and the draw bares beach instead of seabed.
+- **The breaker is re-draped every frame.** `waterSurfaceY()` returns the waterline under the wave
   (the sand it is crossing, or sea level once the beach drops below it) and the swell, foam and
   shallow sheet are rebuilt on top of it. That is what keeps the surge attached to the sea instead
   of reading as a separate slab sliding over dry sand.
