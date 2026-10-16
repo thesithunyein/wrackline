@@ -1194,8 +1194,10 @@ export default function App() {
             // a hand above the sand, so anything left bedded is under the wave, which
             // is the other half of why the wave used to be a window with nothing in it.
             const bedY = groundHeightAt(item.x, item.z) + 0.3;
+            // The same drawn-down waterline the breaker is draped onto, so a piece
+            // riding the surge floats on the water that is actually there.
             const floatY =
-              waterSurfaceY(item.x, item.z) +
+              waterSurfaceY(item.x, item.z, drawdown) +
               SURGE_FLOAT_LIFT +
               Math.sin(now / 260 + item.attachAngle * 3) * 0.06;
             // Only the pieces the water is actually over float: the toe of the surge is

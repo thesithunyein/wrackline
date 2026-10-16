@@ -86,6 +86,12 @@ export const DUNE_OFFSET_Y = -0.6;
 // wherever the dune drops below this surface.
 export const SEA_SURFACE_Y = -2.2;
 
+// How far the sea mesh sinks through the draw, at full drawdown. Shared, so the
+// waterline the breaker is draped onto falls by exactly as much as the water it
+// is attached to: two copies of this number would drift apart into a step where
+// the surge meets the open sea.
+export const SEA_DRAWDOWN_DROP = 0.95;
+
 // How far above still water the tide ever washes. The sea's own vertex swell
 // peaks near 0.94; 0.55 keeps the wet band where the water regularly reaches
 // instead of painting half the beach. Sand above this stays dry and pale.
@@ -154,12 +160,19 @@ const WAVE_LIP_X1 = 3.4;
 const WAVE_SHEET_X0 = -4; // inland end, buried under the sand
 const WAVE_SHEET_X1 = 8; // seaward end, hidden under the swell body
 
-// The surface a wave has to sit on: the sand it is running over, or sea level
-// wherever the beach has already dropped below the waterline. Draping the
-// breaker on this is what keeps it attached to the rest of the sea instead of
-// leaving it standing on dry sand with a gap behind it.
+// The surface a wave has to sit on: the sand it is running over, or the sea it
+// came from, wherever the beach has already dropped below the waterline. Draping
+// the breaker on this is what keeps it attached to the rest of the sea instead
+// of leaving it standing on dry sand with a gap behind it.
+//
+// The sea term is the drawn-down sea, not still water: through the warning the
+// whole sea plane sinks, and a wave that stayed at still-water level would hang
+// above the retreating water it belongs to with a step at the join. The sand
+// term is the raw dune rather than groundHeightAt, because that is floored just
+// above still water so props out at sea do not sink out of sight, and a floor
+// there would win this max() out on the water and pin the surge above the draw.
 export function waterSurfaceY(x: number, z: number, drawdown: number = 0): number {
-  return Math.max(groundHeightAt(x, z) + 0.07 - drawdown * 0.5, SEA_SURFACE_Y);
+  return Math.max(duneHeight(x, z) + 0.07, SEA_SURFACE_Y - drawdown * SEA_DRAWDOWN_DROP);
 }
 
 // Asymmetric shoaling profile: a short steep face shoreward of the crest, then a
@@ -1463,7 +1476,7 @@ export class Wrackline3D {
     // 9.1a The draw. Before a surge the sea pulls back and drops off the beach.
     //      With the text warning gone this is the entire tell, so it is written
     //      large: the whole sea plane sinks and the shore in front of you bares.
-    this.seaMesh.position.y = -2.2 - waveDrawdown * 0.95;
+    this.seaMesh.position.y = SEA_SURFACE_Y - waveDrawdown * SEA_DRAWDOWN_DROP;
 
     // 9.2 Position Wrack Line Flotsam
     const wrackTargetX = 4 + wrackLineRatio * 14;
@@ -1509,7 +1522,7 @@ export class Wrackline3D {
       for (let i = 0; i < pos.count; i++) {
         const lx = initial[i * 3];
         const lz = initial[i * 3 + 2];
-        pos.setY(i, waterSurfaceY(wGroupX + lx, lz) - wGroupY + shape(lx, lz));
+        pos.setY(i, waterSurfaceY(wGroupX + lx, lz, waveDrawdown) - wGroupY + shape(lx, lz));
       }
       pos.needsUpdate = true;
       geo.computeVertexNormals();
@@ -1551,7 +1564,7 @@ export class Wrackline3D {
     if (waveRatio > 0.05 && waveRatio < 0.95 && Math.random() < 0.45) {
       this.addSprayParticle(
         wave3DX + crestX + (Math.random() - 0.5) * 3,
-        waterSurfaceY(wave3DX + crestX, 0) + bodyH * 0.7,
+        waterSurfaceY(wave3DX + crestX, 0, waveDrawdown) + bodyH * 0.7,
         (Math.random() - 0.5) * 28,
         false
       );
