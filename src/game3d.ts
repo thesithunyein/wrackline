@@ -158,8 +158,8 @@ const WAVE_SHEET_X1 = 8; // seaward end, hidden under the swell body
 // wherever the beach has already dropped below the waterline. Draping the
 // breaker on this is what keeps it attached to the rest of the sea instead of
 // leaving it standing on dry sand with a gap behind it.
-export function waterSurfaceY(x: number, z: number): number {
-  return Math.max(groundHeightAt(x, z) + 0.07, SEA_SURFACE_Y);
+export function waterSurfaceY(x: number, z: number, drawdown: number = 0): number {
+  return Math.max(groundHeightAt(x, z) + 0.07 - drawdown * 0.5, SEA_SURFACE_Y);
 }
 
 // Asymmetric shoaling profile: a short steep face shoreward of the crest, then a
