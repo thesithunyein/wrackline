@@ -14,7 +14,7 @@ import {
   toggleMute,
   getIsMuted
 } from './audio';
-import { Wrackline3D, Loot3DItem, groundHeightAt } from './game3d';
+import { Wrackline3D, Loot3DItem, groundHeightAt, waterSurfaceY } from './game3d';
 import { WracklineLogo } from './Logo';
 
 interface DiffConfig {
@@ -85,6 +85,30 @@ const NEAR_MISS_BONUS = 1.5;
 // A short slow-motion beat sells the escape. The clock is scaled in exactly one place.
 const NEAR_MISS_SLOW_FACTOR = 0.45;
 const NEAR_MISS_SLOW_FRAMES = 10;
+
+// Riding the surge. While the wave is on the shore the wrack rides the water instead of
+// sitting on the sand. It floats, so it can be seen and taken through the wave rather
+// than hidden by it; the surge carries it, pushing it inland as it runs up the beach and
+// dragging it back out as it leaves; and anything taken off moving water pays a bonus,
+// because holding loot while the surge is on the shore is what costs hearts. Without
+// this the wave was a window where hauling did nothing at all: every piece pulled in was
+// torn off again before it could be banked.
+const SURGE_GRAB_BONUS = 1.75;
+const SURGE_CARRY_INLAND = 9.0;
+const SURGE_CARRY_SEA = 7.0;
+const SURGE_FLOAT_LIFT = 0.55;
+// The water claws a piece back twice a second, where it used to strip one every
+// 0.125 seconds. Eight a second is faster than anyone can haul, which is what made the
+// surge untakeable; this rate leaves a quick pair of claws something to win.
+const SURGE_TEAR_INTERVAL = 0.4;
+const SURGE_TEAR_CHANCE = 0.55;
+// The band of beach the tide leaves its wrack on. Measured against the terrain: x = 14
+// is the last x that is sand at every z, so nothing in the band can come to rest under
+// the sea surface, and the whole band sits inside the player's walk (x clamps at 18.5).
+const WRACK_NEAR_X = 1.5;
+const WRACK_FAR_X = 14;
+// Where the wash stops on its way up the shore, just behind the player's start.
+const SURGE_STOP_X = -0.5;
 
 // Named stretches of the season, so a run has rungs without a level-select screen.
 const TIERS: { from: number; name: string }[] = [
@@ -262,6 +286,9 @@ export default function App() {
 
     waveX: 1450,
     waveSpeed: 760,
+    // The world x of the surge's leading toe, written every frame the wave is on the
+    // move. Everything that asks "is the water over this piece?" reads it here.
+    wave3DX: 52,
     tearOffTimer: 0,
 
     playerRadius: 18,
@@ -351,17 +378,8 @@ export default function App() {
 
     const types = [0, 1, 2, 3, 4, 6]; // Ammonite, Glass, Doubloon, Driftwood, Clam, Bottle
 
-    // The wrack has to land where the tide can actually leave it: on sand the player
-    // can see and reach. It used to spawn from x = 14 out to x = 52 behind a ramp of
-    // i * 2.2, and the beach seaward of x = 14 drops below the waterline, so nine
-    // pieces in ten came to rest under the sea surface (the sea mesh is 94% opaque)
-    // and past the end of the walkable shore (the player clamps at x = 18.5). The
-    // visible result was a bare beach at the start of every low tide, however early
-    // you set up to haul. x = 14 is the last x that is sand at every z; measured
-    // against the real terrain, every piece in this band is on dry ground.
-    const WRACK_NEAR_X = 1.5;
-    const WRACK_FAR_X = 14;
-
+    // The wrack lands on the sand the tide can actually leave it on: see the WRACK_NEAR_X
+    // and WRACK_FAR_X notes above for why the band is where it is.
     for (let i = 0; i < count; i++) {
       const typeIndex = types[Math.floor(Math.random() * types.length)];
 
@@ -909,6 +927,10 @@ export default function App() {
 
       const s = stateRef.current;
 
+      // The wave is on the shore, or pulling back over it, rather than out at sea. This
+      // is the whole difference between wrack resting on sand and wrack riding water.
+      const surgeOnShore = s.cyclePhase === 'WAVE_SWEEP' || s.cyclePhase === 'WAVE_RETREAT';
+
       if (s.gameState === 'PLAYING' && !pausedRef.current) {
         s.invulnTimer = Math.max(0, s.invulnTimer - dt);
 
@@ -987,6 +1009,12 @@ export default function App() {
 
               const blobR3D = (s.playerRadius / 18) * 1.25;
               if (item.x <= s.playerX3D + blobR3D + 0.45) {
+                // Taken off moving water, the piece pays more. This is the grab the
+                // surge is for, and it is worth a heart because the alternative was a
+                // window where nothing could be kept at all.
+                const tookFromSurge = surgeOnShore;
+                if (tookFromSurge) item.val = Math.round(item.val * SURGE_GRAB_BONUS);
+
                 item.isAttached = true;
                 s.attached3D.push(item);
                 s.held += item.val;
@@ -994,14 +1022,15 @@ export default function App() {
                 playTick();
 
                 // Every grab says what it was worth. The model shapes are the only
-                // other clue and nothing on screen teaches which is which.
+                // other clue and nothing on screen teaches which is which, so a grab
+                // that paid the surge bonus says so in words.
                 const grab: FloatingPopup = {
                   id: Date.now() + Math.random(),
-                  text: `+${item.val}`,
+                  text: tookFromSurge ? `SURGE +${item.val}` : `+${item.val}`,
                   x: 50 + (Math.random() - 0.5) * 12,
                   y: 55,
                   alpha: 0.9,
-                  isGold: item.val >= 250,
+                  isGold: tookFromSurge || item.val >= 250,
                   size: 'small'
                 };
                 setPopups(prev => [...prev.slice(-5), grab]);
@@ -1020,10 +1049,23 @@ export default function App() {
 
           const waveRatio = Math.max(0, Math.min(1, (1400 - s.waveX) / 890));
           const wave3DX = 52 - waveRatio * 55;
+          s.wave3DX = wave3DX;
           // The shell swells as you hold more, and that swell is real: a fat blob is a
           // wider target, so the wave reaches it sooner than a lean one.
           const growR = engine3dRef.current?.blobGrowScale ?? 1;
           const blobR3D = (s.playerRadius / 18) * 1.25 * growR;
+
+          // Running up the beach, the surge pushes the wrack inland with it, toward
+          // the player, so the wave is what carries the trash along with it. Only the
+          // pieces the water is actually over move: the surge pushes what it touches,
+          // and it stops where the wash stops rather than shoving the top of the shore
+          // out of the play area. Spilled loot stays put and is washed away below.
+          for (const item of s.loot3D) {
+            if (item.isAttached || item.doomed) continue;
+            if (item.x >= wave3DX - 0.6) {
+              item.x = Math.max(SURGE_STOP_X, item.x - SURGE_CARRY_INLAND * dt);
+            }
+          }
 
           if (wave3DX <= s.playerX3D + blobR3D + 1.5) {
             // The surge only wounds you if it catches you still holding loot. Wading
@@ -1044,17 +1086,22 @@ export default function App() {
               }
             }
 
+            // The timer has to be spent when the interval elapses, whether or not the
+            // water takes anything: rolling again every frame would turn a twice a
+            // second claw-back into a per-frame one, which is the bug this replaced.
             s.tearOffTimer += dt;
-            if (s.tearOffTimer >= 0.125 && s.attached3D.length > 0) {
+            if (s.tearOffTimer >= SURGE_TEAR_INTERVAL) {
               s.tearOffTimer = 0;
-              const torn3D = s.attached3D.pop();
-              if (torn3D && engine3dRef.current) {
-                torn3D.isAttached = false;
-                engine3dRef.current.scene.remove(torn3D.mesh);
-                s.loot3D = s.loot3D.filter(i => i !== torn3D);
-                s.held = Math.max(0, s.held - torn3D.val);
-                setHeldScore(s.held);
-                playSparkle();
+              if (s.attached3D.length > 0 && Math.random() < SURGE_TEAR_CHANCE) {
+                const torn3D = s.attached3D.pop();
+                if (torn3D && engine3dRef.current) {
+                  torn3D.isAttached = false;
+                  engine3dRef.current.scene.remove(torn3D.mesh);
+                  s.loot3D = s.loot3D.filter(i => i !== torn3D);
+                  s.held = Math.max(0, s.held - torn3D.val);
+                  setHeldScore(s.held);
+                  playSparkle();
+                }
               }
             }
           }
@@ -1074,6 +1121,7 @@ export default function App() {
 
           const waveRatio = Math.max(0, Math.min(1, (1400 - s.waveX) / 890));
           const wave3DX = 52 - waveRatio * 55;
+          s.wave3DX = wave3DX;
           // The shell swells as you hold more, and that swell is real: a fat blob is a
           // wider target, so the wave reaches it sooner than a lean one.
           const growR = engine3dRef.current?.blobGrowScale ?? 1;
@@ -1081,18 +1129,30 @@ export default function App() {
 
           if (wave3DX <= s.playerX3D + blobR3D + 1.5) {
             s.tearOffTimer += dt;
-            if (s.tearOffTimer >= 0.125 && s.attached3D.length > 0) {
+            if (s.tearOffTimer >= SURGE_TEAR_INTERVAL) {
               s.tearOffTimer = 0;
-              const torn3D = s.attached3D.pop();
-              if (torn3D && engine3dRef.current) {
-                torn3D.isAttached = false;
-                engine3dRef.current.scene.remove(torn3D.mesh);
-                s.loot3D = s.loot3D.filter(i => i !== torn3D);
-                s.held = Math.max(0, s.held - torn3D.val);
-                setHeldScore(s.held);
-                playSparkle();
+              if (s.attached3D.length > 0 && Math.random() < SURGE_TEAR_CHANCE) {
+                const torn3D = s.attached3D.pop();
+                if (torn3D && engine3dRef.current) {
+                  torn3D.isAttached = false;
+                  engine3dRef.current.scene.remove(torn3D.mesh);
+                  s.loot3D = s.loot3D.filter(i => i !== torn3D);
+                  s.held = Math.max(0, s.held - torn3D.val);
+                  setHeldScore(s.held);
+                  playSparkle();
+                }
               }
             }
+          }
+
+          // Pulling back out, the water drags the wrack seaward with it: each piece is
+          // pulled only while the receding toe is still over it, so the sand above the
+          // wash is left alone and the pieces down in the wash slide back toward the sea.
+          // That is what makes the retreat a window: grab it off the moving water now,
+          // because it is being taken back out to where you cannot walk.
+          for (const item of s.loot3D) {
+            if (item.isAttached || item.doomed) continue;
+            if (item.x >= wave3DX - 0.6) item.x += SURGE_CARRY_SEA * dt;
           }
 
           if (s.waveX >= 1400) finishCycle();
@@ -1129,8 +1189,20 @@ export default function App() {
             item.mesh.rotation.y += dt * 1.5;
           } else {
             // Bedded on the sand the item is sitting on, so loot stays visible on
-            // the slope instead of sinking into it or hovering over it.
-            item.mesh.position.set(item.x, groundHeightAt(item.x, item.z) + 0.3, item.z);
+            // the slope instead of sinking into it or hovering over it. While the
+            // surge is on the shore the piece rides the water instead: the sheet sits
+            // a hand above the sand, so anything left bedded is under the wave, which
+            // is the other half of why the wave used to be a window with nothing in it.
+            const bedY = groundHeightAt(item.x, item.z) + 0.3;
+            const floatY =
+              waterSurfaceY(item.x, item.z) +
+              SURGE_FLOAT_LIFT +
+              Math.sin(now / 260 + item.attachAngle * 3) * 0.06;
+            // Only the pieces the water is actually over float: the toe of the surge is
+            // the line, so wrack on dry sand further up the shore keeps sitting on the
+            // sand instead of hovering a hand above it.
+            const wet = surgeOnShore && item.x >= s.wave3DX - 0.6;
+            item.mesh.position.set(item.x, wet ? Math.max(bedY, floatY) : bedY, item.z);
             if (s.isHolding || keysRef.current.forward) {
               item.mesh.rotation.y += dt * 3.0;
             }
@@ -1673,7 +1745,10 @@ export default function App() {
                   <span className="font-game text-sm text-[#17181C] block">DON&apos;T GET CAUGHT HOLDING</span>
                   <span className="text-xs text-[#17181C]/85 font-bold">
                     A surge that hits you while you still hold loot costs a heart ♥. Bank first, wade
-                    through with empty claws, or dig in and lose the haul.
+                    through with empty claws, or dig in and lose the haul. You can still haul while
+                    the water is on the shore, and the surge carries the wrack up the beach with it,
+                    so the wave is a window rather than a wall: just expect the water to claw pieces
+                    back as you go.
                   </span>
                 </div>
               </div>
@@ -1731,6 +1806,10 @@ export default function App() {
                 <span className="text-[11px] font-bold text-[#17181C]/70 block mt-1.5">
                   Base values. Your tide multiplies them, and the further up the shore you pull a
                   piece from, the more it pays.
+                </span>
+                <span className="text-[11px] font-bold text-[#17181C] block mt-1">
+                  Taken off moving water, while the surge is on the shore: <b>1.75x</b>, and the grab
+                  says SURGE. That is the payment for the heart it can cost.
                 </span>
               </div>
             </div>

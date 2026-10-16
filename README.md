@@ -56,13 +56,21 @@ stand to bank, and the more the surge can tear off your back.
 | Action | Keys | What it does |
 |---|---|---|
 | **Scuttle** | `A` / `D` or `←` / `→` | Walk the shore. Deeper sand holds richer wrack and a longer walk back. |
-| **Haul** | Hold `Space`, or hold the screen | Everything within reach streams into your shell. Keep holding and your shell swells, and a swollen shell is a wider target. |
+| **Haul** | Hold `Space`, or hold the screen | Everything within reach streams into your shell. The water counts as reach: hauling while the surge is on the shore pays **1.75x**. Keep holding and your shell swells, and a swollen shell is a wider target. |
 | **Bank** | Release `Space` | The haul is stowed and safe. It counts immediately. |
 | **Dig in** | Hold `B` or `Shift` | Burrow under the sand. The surge passes over you, and it takes everything you were holding. A 0.3 second wind-up makes it a commitment rather than a reflex. |
 | **Pick the tide** | `1` / `2` / `3` on the title screen | Calm, Surf or Storm. |
 
 Walking is not the risk. Holding is. Releasing your haul the instant the water arrives is the
 difference between a good wave and a lost one.
+
+Holding into the water is its own gamble, and the game is built to reward it. While the surge is on
+the shore the wrack floats, and the wave carries it: the breaker pushes it up the beach as it runs
+in and drags it back out as it leaves. A piece you could not reach in the low tide can therefore be
+lifted straight off the moving water for **1.75x** its worth, and the grab says `SURGE`. What it
+costs is the old rule, unchanged: a surge that catches you holding takes a heart, and while it has
+you the water claws pieces back off your back about twice a second. The bonus is what that risk
+buys, not free money.
 
 ### Tides
 
@@ -89,7 +97,7 @@ It just keeps eating the shore, which makes the closing waves thinner pickings.
 The calm between surges shrinks all season rather than flattening out at wave seven, so wave
 thirteen is genuinely the tightest wave in the run.
 
-### Two moments the game is built around
+### Three moments the game is built around
 
 - **The King Tide.** From wave three on, a wave can roll in as a King Tide and pay **double** on
   everything you bank during it. The odds climb as the run goes on, it never lands twice in a row,
@@ -99,9 +107,12 @@ thirteen is genuinely the tightest wave in the run.
   already moving, and the bank pays a **1.5× near miss bonus**, once per wave. Ten frames of
   slow motion mark it. This is the moment a run gets remembered for, and it only pays once per
   wave on purpose: if every bank paid the bonus, the greed decision would stop meaning anything.
+- **The surge grab.** The water is the threat, and it is also the best larder on the beach. Haul
+  while the surge is on the shore and the wave carries wrack to your claws for **1.75x**, so the
+  pieces left stranded up at the waterline come to you instead of going back out with the tide.
 
-Get caught holding loot and the surge tears it off your back, piece by piece, and you lose a heart.
-Lose the last one and the wave takes you.
+Get caught holding loot and the surge claws it off your back, about twice a second, and you lose a
+heart. Lose the last one and the wave takes you.
 
 ## How it works
 
@@ -132,13 +143,16 @@ flowchart TD
   Ask -->|"not yet, keep going"| Swell
   Ask -->|"release in time"| Bank["Bank it. The haul is safe."]
   Ask -->|"release in the last 0.45s"| Snuck["SNUCK IT<br/>the bank pays 1.5x"]
-  Ask -->|"too late, still holding"| Tore["The surge tears loot off your back"]
+  Ask -->|"too late, still holding"| Tore["The surge claws loot off your back"]
+  Ask -->|"hold on into the water"| Surge["SURGE GRAB<br/>the wave carries the wrack to you<br/>and every piece off moving water pays 1.75x"]
   Ask -->|"dig in instead"| Dig["You survive, and you lose the whole haul"]
   Tore --> Heart{"Hearts left?"}
+  Surge --> Heart
   Heart -->|"yes"| Start
   Heart -->|"no"| Lost["The season ends here"]
   Bank --> Next["Next wave, and the fall in the wrack line is deeper"]
   Snuck --> Next
+  Surge --> Next
   Dig --> Next
 ```
 
