@@ -351,14 +351,39 @@ export default function App() {
 
     const types = [0, 1, 2, 3, 4, 6]; // Ammonite, Glass, Doubloon, Driftwood, Clam, Bottle
 
+    // The wrack has to land where the tide can actually leave it: on sand the player
+    // can see and reach. It used to spawn from x = 14 out to x = 52 behind a ramp of
+    // i * 2.2, and the beach seaward of x = 14 drops below the waterline, so nine
+    // pieces in ten came to rest under the sea surface (the sea mesh is 94% opaque)
+    // and past the end of the walkable shore (the player clamps at x = 18.5). The
+    // visible result was a bare beach at the start of every low tide, however early
+    // you set up to haul. x = 14 is the last x that is sand at every z; measured
+    // against the real terrain, every piece in this band is on dry ground.
+    const WRACK_NEAR_X = 1.5;
+    const WRACK_FAR_X = 14;
+
     for (let i = 0; i < count; i++) {
       const typeIndex = types[Math.floor(Math.random() * types.length)];
-      const band: 'near' | 'mid' | 'far' = i < 3 ? 'near' : i < 6 ? 'mid' : 'far';
-      const mesh = engine3dRef.current.createLootMesh(typeIndex, band);
 
-      const spawnX = 14 + Math.random() * 18 + i * 2.2;
+      // Spread the pieces across the sand instead of marching them out to sea. The
+      // gradient from the near piece to the one at the waterline IS the reward for
+      // walking up the shore, and it only reads if every piece is on ground you can
+      // stand on. The last piece is clamped, so a wide roll cannot float it off the
+      // beach and back under the swell.
+      const spread = i / Math.max(1, count - 1);
+      const spawnX = Math.min(
+        WRACK_FAR_X,
+        WRACK_NEAR_X + (WRACK_FAR_X - WRACK_NEAR_X) * spread + (Math.random() - 0.5) * 1.2
+      );
       const spawnZ = (Math.random() - 0.5) * 11;
       const groundY = groundHeightAt(spawnX, spawnZ) + 0.3;
+
+      // The sparkle marker rides the pieces that carry the most risk, so it is read
+      // off the piece's place on the shore rather than its index in the loop.
+      const shoreFrac = (spawnX - WRACK_NEAR_X) / (WRACK_FAR_X - WRACK_NEAR_X);
+      const band: 'near' | 'mid' | 'far' =
+        shoreFrac < 0.34 ? 'near' : shoreFrac < 0.67 ? 'mid' : 'far';
+      const mesh = engine3dRef.current.createLootMesh(typeIndex, band);
 
       mesh.position.set(spawnX, groundY, spawnZ);
       engine3dRef.current.scene.add(mesh);
@@ -374,7 +399,7 @@ export default function App() {
       // Risk pays. The surge arrives from the seaward end and takes the furthest loot
       // first, so the further up the shore a piece sits the less time there is to
       // reach it, and the more it is worth for the trouble.
-      const risk = Math.max(0, Math.min(1, (spawnX - 14) / 30));
+      const risk = Math.max(0, Math.min(1, shoreFrac));
       const val = Math.round(baseVal * s.currentDiff.multiplier * (1 + risk * 1.2));
 
       s.loot3D.push({
