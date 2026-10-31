@@ -1816,15 +1816,20 @@ export default function App() {
         <div
           key={p.id}
           style={{
-            left: `${p.x}%`,
+            // The clamp keeps a wide popup from hanging off a phone edge when it
+            // lands out at the waterline on slot 3.
+            left: `clamp(88px, ${p.x}%, calc(100% - 88px))`,
             top: `${p.y}%`,
-            opacity: p.alpha
+            opacity: p.alpha,
+            // Gold sits over white foam as often as sand, and a soft shadow
+            // disappears there. Five hard offsets make a 2px outline instead.
+            textShadow: p.isGold
+              ? '-2px -2px 0 #17181C, 2px -2px 0 #17181C, -2px 2px 0 #17181C, 2px 2px 0 #17181C, 0 3px 0 #17181C'
+              : '0 1px 2px rgba(23, 24, 28, 0.3)'
           }}
           className={`absolute w-max -translate-x-1/2 -translate-y-1/2 pointer-events-none font-game transition-transform ${
             p.size === 'small' ? 'text-xl md:text-2xl' : 'text-4xl'
-          } ${
-            p.isGold ? 'text-[#F6C445] drop-shadow-[0_2px_0_#17181C]' : 'text-[#17181C] drop-shadow-sm'
-          }`}
+          } ${p.isGold ? 'text-[#F6C445]' : 'text-[#17181C]'}`}
         >
           {p.text}
         </div>
