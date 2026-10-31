@@ -52,6 +52,15 @@ import {
 } from './game/leaderboard';
 import type { BoardEntry, BoardId } from './game/leaderboardCore';
 import { planWaveLoot } from './game/loot';
+import {
+  LANGUAGES,
+  loadLang,
+  saveLang,
+  translate,
+  type Lang,
+  type Vars
+} from './game/i18n';
+import { renderShellThumbnails } from './shellPreview';
 
 interface DiffConfig {
   name: string;
@@ -119,6 +128,8 @@ const DIG_IN_TIME = 0.3;
 // Where the player's name for the share card lives. The score is already kept in
 // localStorage, so the name joins it there: same device, same lifetime, no account.
 const SHARE_NAME_KEY = 'wrackline_name';
+// Sound is a setting now, so it survives a reload like the language does.
+const MUTED_KEY = 'wrackline_muted';
 
 const NEAR_MISS_WINDOW = 0.45;
 const NEAR_MISS_BONUS = 1.5;
@@ -247,6 +258,22 @@ const IconExpand: React.FC = () => (
   </svg>
 );
 
+const IconGear: React.FC = () => (
+  <svg
+    viewBox="0 0 24 24"
+    className="w-5 h-5"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={2.1}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <circle cx="12" cy="12" r="3.2" />
+    <path d="M12 3.2v2.2M12 18.6v2.2M3.2 12h2.2M18.6 12h2.2M5.8 5.8l1.6 1.6M16.6 16.6l1.6 1.6M18.2 5.8l-1.6 1.6M7.4 16.6l-1.6 1.6" />
+  </svg>
+);
+
 const IconBoard: React.FC = () => (
   <svg
     viewBox="0 0 24 24"
@@ -294,7 +321,27 @@ export default function App() {
   const [hearts, setHearts] = useState<number>(DIFFS.SURF.hearts);
   const [endCause, setEndCause] = useState<EndCause>('SURGE');
   const [hurtFlash, setHurtFlash] = useState<boolean>(false);
-  const [muted, setMuted] = useState<boolean>(getIsMuted);
+  const [muted, setMuted] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(MUTED_KEY) === '1';
+    } catch {
+      return getIsMuted();
+    }
+  });
+  // Language and settings. The ref lets the game loop and the share handlers read the
+  // current language without taking a dependency on it: a language switch must never
+  // restart the render loop mid-run.
+  const [lang, setLang] = useState<Lang>(loadLang);
+  const langRef = useRef<Lang>(lang);
+  langRef.current = lang;
+  const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
+  // Browsers change fullscreen outside React (Esc, the F11 key, the phone gesture), so
+  // the row's label has to follow the document rather than the last click.
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(
+    () => typeof document !== 'undefined' && !!document.fullscreenElement
+  );
+  const [shellThumbs, setShellThumbs] = useState<Record<string, string>>({});
+  const t = (text: string, vars?: Vars) => translate(lang, text, vars);
   const [popups, setPopups] = useState<FloatingPopup[]>([]);
   const [wavesSurvived, setWavesSurvived] = useState<number>(0);
   const [showGuide, setShowGuide] = useState<boolean>(false);
@@ -460,6 +507,43 @@ export default function App() {
   useEffect(() => {
     engine3dRef.current?.setShellColor(shell.color);
   }, [shell.color]);
+
+  // Sound is a saved setting now. The audio module owns the mute flag, so this brings
+  // it in line with the stored choice and keeps the two from drifting apart.
+  useEffect(() => {
+    if (getIsMuted() !== muted) toggleMute();
+    try {
+      localStorage.setItem(MUTED_KEY, muted ? '1' : '0');
+    } catch {}
+  }, [muted]);
+
+  // The document language drives the font stack in index.html, which is what gives
+  // Burmese real glyphs instead of a wall of boxes.
+  useEffect(() => {
+    document.documentElement.lang = lang;
+    saveLang(lang);
+  }, [lang]);
+
+  useEffect(() => {
+    const sync = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', sync);
+    return () => document.removeEventListener('fullscreenchange', sync);
+  }, []);
+
+  // Portraits are drawn the first time the shell row is opened, a frame after the
+  // sheet paints, so the sheet is never held up by a WebGL render nobody has seen yet.
+  useEffect(() => {
+    if (!showDailySheet) return;
+    let alive = true;
+    const timer = window.setTimeout(() => {
+      const thumbs = renderShellThumbnails(SHELLS.map(candidate => candidate.color), 192);
+      if (alive && Object.keys(thumbs).length > 0) setShellThumbs(thumbs);
+    }, 30);
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
+  }, [showDailySheet]);
 
   // How long until tomorrow's shore. Ticked only while the sheet is open, so the
   // countdown is right when it is read and costs nothing when it is not.
@@ -707,9 +791,14 @@ export default function App() {
 
     // Announce the wave you have just walked into. This is progress, not danger. The
     // water carries the danger now, and it is what gives the season its rungs.
+    const phrase = (text: string) => translate(langRef.current, text);
     setWaveIntro(
-      `WAVE ${s.waveIndex + 1} · ${tierForWave(s.waveIndex + 1)} · ${s.currentDiff.name}` +
-        (s.runMode === 'DAILY' ? ` · ${s.mods.name}` : '')
+      translate(langRef.current, 'WAVE {wave} · {tier} · {tide}{mod}', {
+        wave: s.waveIndex + 1,
+        tier: phrase(tierForWave(s.waveIndex + 1)),
+        tide: phrase(s.currentDiff.name),
+        mod: s.runMode === 'DAILY' ? ` · ${phrase(s.mods.name)}` : ''
+      })
     );
     if (introTimerRef.current !== null) window.clearTimeout(introTimerRef.current);
     introTimerRef.current = window.setTimeout(() => setWaveIntro(null), 1800);
@@ -969,7 +1058,11 @@ export default function App() {
 
     const newPopup: FloatingPopup = {
       id: Date.now(),
-      text: nearMiss ? `SNUCK IT  +${earned}` : isKing ? `+${earned} (2X)` : `+${earned}`,
+      text: nearMiss
+        ? translate(langRef.current, 'SNUCK IT +{n}', { n: earned })
+        : isKing
+          ? translate(langRef.current, '+{n} (2X)', { n: earned })
+          : `+${earned}`,
       x: 50,
       y: 45,
       alpha: 1,
@@ -1090,19 +1183,14 @@ export default function App() {
     return () => clearInterval(interval);
   }, [popups]);
 
+  const fullscreenAvailable = typeof document !== 'undefined' && document.fullscreenEnabled;
+
   const toggleFullscreen = useCallback(() => {
     if (!document.fullscreenElement) {
       document.documentElement.requestFullscreen().catch(() => {});
     } else {
       document.exitFullscreen().catch(() => {});
     }
-  }, []);
-
-  const handleToggleMute = useCallback((e?: React.MouseEvent) => {
-    if (e) e.stopPropagation();
-    initAudio();
-    const isM = toggleMute();
-    setMuted(isM);
   }, []);
 
   // Initialize 3D Engine
@@ -1361,7 +1449,9 @@ export default function App() {
                 // that paid the surge bonus says so in words.
                 const grab: FloatingPopup = {
                   id: Date.now() + Math.random(),
-                  text: tookFromSurge ? `SURGE +${item.val}` : `+${item.val}`,
+                  text: tookFromSurge
+                    ? translate(langRef.current, 'SURGE +{n}', { n: item.val })
+                    : `+${item.val}`,
                   x: 50 + (Math.random() - 0.5) * 12,
                   y: 55,
                   alpha: 0.9,
@@ -1397,7 +1487,7 @@ export default function App() {
               ...prev.slice(-5),
               {
                 id: Date.now() + Math.random(),
-                text: `WASHED IN +${item.val}`,
+                text: translate(langRef.current, 'WASHED IN +{n}', { n: item.val }),
                 x: 70 + slot * 5,
                 y: 44 + slot * 7,
                 alpha: 0.9,
@@ -1604,12 +1694,19 @@ export default function App() {
   // else. This puts it where a friend or a judge can see it. It fails silently on purpose:
   // a share button that throws is worse than no share button.
   const shareResult = useCallback(async () => {
+    const tr = (text: string, vars?: Vars) => translate(langRef.current, text, vars);
     const headline =
       endCause === 'SURVIVED'
-        ? `I OUTLASTED THE TIDE in WRACKLINE · ${bankedScore}`
-        : `The surge took me on wave ${wavesSurvived + 1} · ${bankedScore} in WRACKLINE`;
+        ? tr('I OUTLASTED THE TIDE in WRACKLINE · {score}', { score: bankedScore })
+        : tr('The surge took me on wave {wave} · {score} in WRACKLINE', {
+            wave: wavesSurvived + 1,
+            score: bankedScore
+          });
     const url = 'https://wrackline.vercel.app';
-    const text = `${headline} · ${selectedDiff.name} tide`;
+    const text = tr('{headline} · {tide} tide', {
+      headline,
+      tide: tr(selectedDiff.name)
+    });
 
     // Clipboard first, share sheet second. The sheet is the nicer gesture on a phone, but
     // on a desktop it is a native dialog that can simply sit there, and this path only runs
@@ -1617,7 +1714,7 @@ export default function App() {
     try {
       if (typeof navigator !== 'undefined' && navigator.clipboard) {
         await navigator.clipboard.writeText(`${text}\n${url}`);
-        setShareNote('COPIED');
+        setShareNote(translate(langRef.current, 'COPIED'));
         window.setTimeout(() => setShareNote(''), 1600);
         return;
       }
@@ -1671,7 +1768,7 @@ export default function App() {
         // its blob pulled out from under it is a truncated file.
         window.setTimeout(() => URL.revokeObjectURL(url), 10000);
         setCardState('SAVED');
-        setShareNote('IMAGE SAVED');
+        setShareNote(translate(langRef.current, 'IMAGE SAVED'));
       } catch (err) {
         // A card that cannot be drawn or saved still leaves the run shareable as text.
         console.error('WRACKLINE could not save the share card', err);
@@ -1715,7 +1812,10 @@ export default function App() {
   // Everything above is the fallback path: a card that cannot be drawn still shares as text.
 
   return (
-    <div className="relative w-full app-shell overflow-hidden select-none bg-[#D4E6F4] flex items-center justify-center font-ui">
+    <div
+      data-lang={lang}
+      className="relative w-full app-shell overflow-hidden select-none bg-[#D4E6F4] flex items-center justify-center font-ui"
+    >
       {/* 3D Viewport (Full Screen Canvas) */}
       <div
         ref={container3dRef}
@@ -1741,45 +1841,37 @@ export default function App() {
       />
 
       {/* Top Header Controls: Low-Poly Tactile 3D Buttons.
-          z-50, above the title card's overlay but below the end screen and the
-          sheets: the guide, sound, fullscreen and board buttons have to work from
-          the menu, which is the screen a first-time player is looking at. */}
+          Three buttons, in the order they are reached for: the boards, the guide,
+          the settings. Sound and fullscreen moved inside settings, which is where a
+          player looks for them and which keeps this row from growing a fourth icon.
+          z-50, above the title card but below the end screen and the sheets. */}
       <div className="absolute top-[max(1rem,env(safe-area-inset-top))] right-[max(1rem,env(safe-area-inset-right))] md:top-5 md:right-5 z-50 flex flex-col items-end gap-2 md:flex-row-reverse md:items-start md:gap-3">
         <div className="flex items-center gap-2 md:gap-3">
           <button
+            onClick={() => setBoardOpen(true)}
+            title={t('Tide boards')}
+            aria-label={t('Open the tide boards')}
+            className="w-10 h-10 md:w-11 md:h-11 rounded-xl bg-[#FDFBF7] hover:bg-[#EAD7B0] border-2 border-[#17181C] shadow-[0_3px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] text-[#17181C] flex items-center justify-center transition-all cursor-pointer"
+          >
+            <IconBoard />
+          </button>
+
+          <button
             onClick={() => setShowGuide(prev => !prev)}
-            title="Guide & Controls (H)"
-            aria-label="How to play"
+            title={t('HOW TO PLAY')}
+            aria-label={t('How to play')}
             className="w-10 h-10 md:w-11 md:h-11 rounded-xl bg-[#FDFBF7] hover:bg-[#EAD7B0] border-2 border-[#17181C] shadow-[0_3px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] text-[#17181C] font-bold text-base flex items-center justify-center transition-all cursor-pointer"
           >
             ?
           </button>
 
           <button
-            onClick={() => handleToggleMute()}
-            title="Toggle Audio (M)"
-            aria-label={muted ? 'Turn sound on' : 'Turn sound off'}
-            className="w-10 h-10 md:w-11 md:h-11 rounded-xl bg-[#FDFBF7] hover:bg-[#EAD7B0] border-2 border-[#17181C] shadow-[0_3px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] text-[#17181C] text-sm flex items-center justify-center transition-all cursor-pointer"
-          >
-            <IconSound muted={muted} />
-          </button>
-
-          <button
-            onClick={toggleFullscreen}
-            title="Toggle Fullscreen (F)"
-            aria-label="Toggle fullscreen"
-            className="w-10 h-10 md:w-11 md:h-11 rounded-xl bg-[#FDFBF7] hover:bg-[#EAD7B0] border-2 border-[#17181C] shadow-[0_3px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] text-[#17181C] text-base flex items-center justify-center transition-all cursor-pointer"
-          >
-            <IconExpand />
-          </button>
-
-          <button
-            onClick={() => setBoardOpen(true)}
-            title="Tide boards"
-            aria-label="Open the tide boards"
+            onClick={() => setSettingsOpen(true)}
+            title={t('SETTINGS')}
+            aria-label={t('Open settings')}
             className="w-10 h-10 md:w-11 md:h-11 rounded-xl bg-[#FDFBF7] hover:bg-[#EAD7B0] border-2 border-[#17181C] shadow-[0_3px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] text-[#17181C] flex items-center justify-center transition-all cursor-pointer"
           >
-            <IconBoard />
+            <IconGear />
           </button>
         </div>
 
@@ -1791,7 +1883,7 @@ export default function App() {
           <div className="pointer-events-none flex items-center gap-2 md:mt-1 md:gap-3">
             <div className="bg-[#FDFBF7]/95 border-2 border-[#17181C] rounded-2xl px-3 py-2 md:px-4 md:py-2.5 shadow-[0_4px_0_#17181C] flex flex-col items-end gap-0.5">
               <span className="text-[10px] font-black text-[#17181C]/60 uppercase tracking-widest">
-                BEST
+                {t('BEST')}
               </span>
               <span className="font-game text-lg min-[385px]:text-xl md:text-2xl font-bold text-[#24698F] leading-none tabular-nums">
                 {bestScore}
@@ -1800,7 +1892,7 @@ export default function App() {
 
             <div className="bg-[#FDFBF7]/95 border-2 border-[#17181C] rounded-2xl px-3 py-2 md:px-3.5 md:py-2.5 shadow-[0_4px_0_#17181C] flex flex-col items-center gap-0.5">
               <span className="text-[10px] font-black text-[#17181C]/60 uppercase tracking-widest">
-                WAVE
+                {t('WAVE')}
               </span>
               <span className="font-game text-lg min-[385px]:text-xl md:text-2xl font-bold text-[#E8A317] leading-none tabular-nums">
                 {Math.min(wavesSurvived + 1, SEASON_WAVES)}
@@ -1839,7 +1931,7 @@ export default function App() {
       {bestScore > 0 && appState === 'TITLE' && (
         <div className="absolute top-[max(1rem,env(safe-area-inset-top))] left-[max(1rem,env(safe-area-inset-left))] md:top-5 md:left-5 z-40 bg-[#FDFBF7] border-2 border-[#17181C] rounded-2xl px-4 py-2 shadow-[0_3px_0_#17181C] flex items-center gap-2 pointer-events-none">
           <span className="text-[10px] font-black text-[#17181C]/60 uppercase tracking-widest">
-            BEST
+            {t('BEST')}
           </span>
           <span className="font-game text-xl font-bold text-[#24698F] leading-none">
             {bestScore}
@@ -1853,12 +1945,12 @@ export default function App() {
         <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-[#D4E8F8] p-6 text-center">
           <WracklineLogo size="sm" showTitle={false} className="mb-4" />
           <h2 className="font-game text-2xl md:text-3xl text-[#17181C] mb-3 tracking-wide">
-            THIS BROWSER CANNOT RUN THE SHORE
+            {t('THIS BROWSER CANNOT RUN THE SHORE')}
           </h2>
           <p className="text-xs md:text-sm font-bold text-[#17181C]/75 max-w-sm">
             {webglFailed
-              ? 'WRACKLINE draws its beach with WebGL, and this browser either does not support it or has it switched off. Another browser, or hardware acceleration turned back on, will do it.'
-              : 'Something stopped the shore from loading. A reload usually fixes it.'}
+              ? t('WRACKLINE draws its beach with WebGL, and this browser either does not support it or has it switched off. Another browser, or hardware acceleration turned back on, will do it.')
+              : t('Something stopped the shore from loading. A reload usually fixes it.')}
           </p>
         </div>
       )}
@@ -1874,7 +1966,7 @@ export default function App() {
             />
           </div>
           <span className="font-game text-xs text-[#24698F] tracking-widest mt-4 uppercase">
-            LOADING WORLD
+            {t('LOADING WORLD')}
           </span>
         </div>
       )}
@@ -1886,7 +1978,7 @@ export default function App() {
           <div className="flex flex-col items-center shrink-0 pt-14 pointer-events-none md:pt-2">
             <WracklineLogo size="md" className="mb-3 md:mb-4" />
             <p className="font-game text-xs md:text-sm text-[#17181C]/75 tracking-widest uppercase leading-relaxed text-center">
-              SURVIVE THE TIDE · HARVEST THE SHORE
+              {t('SURVIVE THE TIDE · HARVEST THE SHORE')}
             </p>
           </div>
 
@@ -1908,7 +2000,7 @@ export default function App() {
                         : 'bg-[#FDFBF7]/90 text-[#17181C]/70 hover:bg-[#EAD7B0]/60 shadow-[0_2px_0_#17181C]'
                     }`}
                   >
-                    {mode === 'SEASON' ? 'SEASON' : 'DAILY TIDE'}
+                    {t(mode === 'SEASON' ? 'SEASON' : 'DAILY TIDE')}
                   </button>
                 );
               })}
@@ -1920,13 +2012,13 @@ export default function App() {
               className="w-full py-4 md:py-5 rounded-2xl bg-[#17181C] hover:bg-[#24698F] text-[#FFFDF8] font-game text-2xl md:text-3xl tracking-widest border-2 border-[#17181C] shadow-[0_6px_0_#0D0E10] hover:shadow-[0_8px_0_#0D0E10] active:translate-y-[3px] active:shadow-[0_2px_0_#0D0E10] transition-all cursor-pointer flex items-center justify-center gap-3 mb-5 md:mb-7"
             >
               <span>▶</span>
-              <span>PLAY</span>
+              <span>{t('PLAY')}</span>
             </button>
 
             {/* Tide Intensity / Difficulty (Clearly Separated & Labeled) */}
             <div className="flex flex-col items-center w-full bg-[#FDFBF7]/90 backdrop-blur-xs p-3 md:p-3.5 rounded-2xl border-2 border-[#17181C] shadow-[0_4px_0_#17181C]">
               <span className="text-[10px] font-black text-[#17181C]/60 uppercase tracking-widest mb-2.5">
-                TIDE INTENSITY
+                {t('TIDE INTENSITY')}
               </span>
               <div className="grid grid-cols-3 gap-2 md:gap-2.5 w-full">
                 {(['CALM', 'SURF', 'STORM'] as const).map(key => {
@@ -1942,7 +2034,7 @@ export default function App() {
                           : 'bg-white text-[#17181C]/75 hover:bg-[#EAD7B0]/60 shadow-[0_2px_0_#17181C]'
                       }`}
                     >
-                      <span>{d.name}</span>
+                      <span>{t(d.name)}</span>
                       <span className="text-[10px] font-ui font-bold opacity-80 mt-0.5 leading-none">{d.mult}</span>
                     </button>
                   );
@@ -1955,22 +2047,27 @@ export default function App() {
             <button
               onClick={() => setShowDailySheet(true)}
               className="w-full mt-3 flex items-center justify-between gap-3 bg-[#FDFBF7]/90 backdrop-blur-xs px-3.5 py-2.5 rounded-2xl border-2 border-[#17181C] shadow-[0_3px_0_#17181C] hover:bg-[#EAD7B0]/60 active:translate-y-[1px] active:shadow-[0_2px_0_#17181C] transition-all cursor-pointer text-left"
-              aria-label="Open today's tide, missions and shells"
+              aria-label={t("Open today's tide, missions and shells")}
             >
               <span className="flex flex-col leading-tight">
                 <span className="text-[9px] font-black text-[#17181C]/55 uppercase tracking-widest">
-                  TODAY'S TIDE
+                  {t("TODAY'S TIDE")}
                 </span>
                 <span className="font-game text-sm tracking-wider text-[#24698F]">
-                  {todayTide.name}
+                  {t(todayTide.name)}
                 </span>
               </span>
               <span className="flex flex-col items-end leading-tight">
                 <span className="text-[9px] font-black text-[#17181C]/55 uppercase tracking-widest">
-                  {dailySave.streak > 0 ? `${dailySave.streak} DAY STREAK` : 'NO STREAK'}
+                  {dailySave.streak > 0
+                    ? t('{n} DAY STREAK', { n: dailySave.streak })
+                    : t('NO STREAK')}
                 </span>
                 <span className="font-game text-sm tracking-wider text-[#17181C]">
-                  {dailySave.done.length}/{todayMissions.length} MISSIONS
+                  {t('{done}/{total} MISSIONS', {
+                    done: dailySave.done.length,
+                    total: todayMissions.length
+                  })}
                 </span>
               </span>
             </button>
@@ -1990,7 +2087,7 @@ export default function App() {
           {/* Low-Poly Score Card (Top Left) */}
           <div className="absolute top-[max(1rem,env(safe-area-inset-top))] left-[max(1rem,env(safe-area-inset-left))] md:top-6 md:left-8 pointer-events-none flex flex-col gap-0.5 bg-[#FDFBF7]/95 border-2 border-[#17181C] rounded-2xl p-3 md:p-3.5 shadow-[0_4px_0_#17181C]">
             <span className="text-[10px] font-black text-[#17181C]/60 uppercase tracking-widest">
-              SCORE
+              {t('SCORE')}
             </span>
             {/* Six-figure scores are the normal case, and at 360px the wider type
                 ran into the icon row. The score steps down before the layout has to. */}
@@ -2003,7 +2100,10 @@ export default function App() {
             <div
               className="flex items-center gap-1 mt-1"
               role="img"
-              aria-label={`${hearts} of ${selectedDiff.hearts} hearts left`}
+              aria-label={t('{hearts} of {total} hearts left', {
+                hearts,
+                total: selectedDiff.hearts
+              })}
             >
               {Array.from({ length: selectedDiff.hearts }).map((_, i) => (
                 <span
@@ -2033,7 +2133,7 @@ export default function App() {
               wave is announced before it lands and not only between waves. */}
           {isKingTide && (
             <div className="absolute top-[calc(max(1rem,env(safe-area-inset-top))+8rem)] md:top-20 left-1/2 -translate-x-1/2 z-30 pointer-events-none w-max font-game bg-[#F6C445] border-2 border-[#17181C] text-[#17181C] text-base md:text-xl px-5 md:px-7 py-2 rounded-xl shadow-[0_4px_0_#17181C] tracking-widest animate-pulse max-w-[92vw] text-center">
-              KING TIDE · 2X
+              {t('KING TIDE · 2X')}
             </div>
           )}
 
@@ -2048,7 +2148,7 @@ export default function App() {
           {/* Held under the sand: the claws are empty and the surge is going over. */}
           {burrowed && (
             <div className="absolute top-[58%] left-1/2 -translate-x-1/2 z-30 pointer-events-none w-max bg-[#F6C445] border-2 border-[#17181C] px-4 py-1.5 rounded-xl shadow-[0_4px_0_#17181C] font-game text-xs md:text-sm tracking-widest text-[#17181C] uppercase">
-              Dug in · safe, and empty clawed
+              {t('Dug in · safe, and empty clawed')}
             </div>
           )}
 
@@ -2056,7 +2156,7 @@ export default function App() {
           {showInputCue && (
             <div className="absolute bottom-[calc(max(1.5rem,env(safe-area-inset-bottom))+5.5rem)] left-1/2 -translate-x-1/2 pointer-events-none w-max bg-[#FDFBF7]/95 border-2 border-[#17181C] px-6 py-2.5 rounded-xl shadow-[0_3px_0_#17181C]">
               <span className="font-game text-sm text-[#17181C] tracking-wider uppercase">
-                {isTouch ? 'HOLD HAUL TO LOOT' : 'HOLD [SPACE] TO HAUL'}
+                {isTouch ? t('HOLD HAUL TO LOOT') : t('HOLD [SPACE] TO HAUL')}
               </span>
             </div>
           )}
@@ -2118,7 +2218,7 @@ export default function App() {
               }`}
             >
               <span>⚡</span>
-              <span>HAUL</span>
+              <span>{t('HAUL')}</span>
             </button>
 
             <button
@@ -2166,7 +2266,7 @@ export default function App() {
               }`}
             >
               <span>▼</span>
-              <span>DIG</span>
+              <span>{t('DIG')}</span>
             </button>
           </div>
 
@@ -2175,21 +2275,25 @@ export default function App() {
           {paused && (
             <div className="absolute inset-0 z-50 bg-[#D4E6F4]/75 backdrop-blur-[2px] flex flex-col items-center justify-center pointer-events-auto">
               <span className="font-game text-4xl md:text-5xl text-[#17181C] tracking-widest mb-2">
-                PAUSED
+                {t('PAUSED')}
               </span>
               <span className="text-[10px] md:text-xs font-black text-[#17181C]/60 uppercase tracking-widest mb-6 text-center px-6">
-                the tide is holding its breath · wave {Math.min(wavesSurvived + 1, SEASON_WAVES)} of{' '}
-                {SEASON_WAVES}
+                {t('the tide is holding its breath · wave {wave} of {total}', {
+                  wave: Math.min(wavesSurvived + 1, SEASON_WAVES),
+                  total: SEASON_WAVES
+                })}
               </span>
               <button
                 onClick={togglePause}
-                aria-label="Resume playing"
+                aria-label={t('Resume playing')}
                 className="px-8 py-3.5 rounded-2xl bg-[#17181C] hover:bg-[#24698F] text-[#FFFDF8] font-game text-xl tracking-wider border-2 border-[#17181C] shadow-[0_5px_0_#0D0E10] active:translate-y-[2px] active:shadow-[0_1px_0_#0D0E10] transition-all cursor-pointer"
               >
-                RESUME
+                {t('RESUME')}
               </button>
               <span className="mt-5 text-[10px] font-black text-[#17181C]/45 uppercase tracking-widest text-center px-6">
-                {isTouch ? 'switching tabs pauses for you' : 'ESC or P to pause · switching tabs pauses for you'}
+                {isTouch
+                  ? t('switching tabs pauses for you')
+                  : t('ESC or P to pause · switching tabs pauses for you')}
               </span>
             </div>
           )}
@@ -2210,9 +2314,10 @@ export default function App() {
             onClick={e => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-5">
-              <h3 className="font-game text-2xl text-[#17181C] tracking-wide">HOW TO PLAY</h3>
+              <h3 className="font-game text-2xl text-[#17181C] tracking-wide">{t('HOW TO PLAY')}</h3>
               <button
                 onClick={() => setShowGuide(false)}
+                aria-label={t('Close the guide')}
                 className="w-8 h-8 rounded-lg bg-[#EAD7B0] hover:bg-[#DFC798] border-2 border-[#17181C] shadow-[0_2px_0_#17181C] active:translate-y-[1px] active:shadow-none flex items-center justify-center font-bold text-xs cursor-pointer text-[#17181C]"
               >
                 ✕
@@ -2224,9 +2329,9 @@ export default function App() {
               <div className="bg-[#EAD7B0]/30 p-3 rounded-xl border-2 border-[#17181C]/20 flex items-start gap-3">
                 <span className="font-game text-xl text-[#24698F]">01</span>
                 <div>
-                  <span className="font-game text-sm text-[#17181C] block">MOVE</span>
+                  <span className="font-game text-sm text-[#17181C] block">{t('MOVE')}</span>
                   <span className="text-xs text-[#17181C]/85 font-bold">
-                    {isTouch ? 'Hold the ◀ and ▶ buttons to walk the shore.' : 'Hold [A] / [D], the arrow keys, or the buttons on screen.'}
+                    {t(isTouch ? 'Hold the ◀ and ▶ buttons to walk the shore.' : 'Hold [A] / [D], the arrow keys, or the buttons on screen.')}
                   </span>
                 </div>
               </div>
@@ -2234,11 +2339,11 @@ export default function App() {
               <div className="bg-[#EAD7B0]/30 p-3 rounded-xl border-2 border-[#17181C]/20 flex items-start gap-3">
                 <span className="font-game text-xl text-[#24698F]">02</span>
                 <div>
-                  <span className="font-game text-sm text-[#17181C] block">HAUL</span>
+                  <span className="font-game text-sm text-[#17181C] block">{t('HAUL')}</span>
                   <span className="text-xs text-[#17181C]/85 font-bold">
-                    {isTouch
+                    {t(isTouch
                       ? 'Hold the HAUL button to pull in wrack within claw reach. Walk the wrack line to take the far, fatter pieces.'
-                      : 'Hold [SPACE] or Click to pull in wrack within claw reach. Walk the wrack line to take the far, fatter pieces.'}
+                      : 'Hold [SPACE] or Click to pull in wrack within claw reach. Walk the wrack line to take the far, fatter pieces.')}
                   </span>
                 </div>
               </div>
@@ -2246,9 +2351,9 @@ export default function App() {
               <div className="bg-[#EAD7B0]/30 p-3 rounded-xl border-2 border-[#17181C]/20 flex items-start gap-3">
                 <span className="font-game text-xl text-[#24698F]">03</span>
                 <div>
-                  <span className="font-game text-sm text-[#17181C] block">BANK</span>
+                  <span className="font-game text-sm text-[#17181C] block">{t('BANK')}</span>
                   <span className="text-xs text-[#17181C]/85 font-bold">
-                    Release to deposit score safely.
+                    {t('Release to deposit score safely.')}
                   </span>
                 </div>
               </div>
@@ -2256,13 +2361,9 @@ export default function App() {
               <div className="bg-[#EAD7B0]/30 p-3 rounded-xl border-2 border-[#17181C]/20 flex items-start gap-3">
                 <span className="font-game text-xl text-[#E25B45]">04</span>
                 <div>
-                  <span className="font-game text-sm text-[#17181C] block">DON&apos;T GET CAUGHT HOLDING</span>
+                  <span className="font-game text-sm text-[#17181C] block">{t("DON'T GET CAUGHT HOLDING")}</span>
                   <span className="text-xs text-[#17181C]/85 font-bold">
-                    A surge that hits you while you still hold loot costs a heart ♥. Bank first, wade
-                    through with empty claws, or dig in and lose the haul. You can still haul while
-                    the water is on the shore, and the surge carries the wrack up the beach with it,
-                    so the wave is a window rather than a wall: just expect the water to claw pieces
-                    back as you go.
+                    {t('A surge that hits you while you still hold loot costs a heart ♥. Bank first, wade through with empty claws, or dig in and lose the haul. You can still haul while the water is on the shore, and the surge carries the wrack up the beach with it, so the wave is a window rather than a wall: just expect the water to claw pieces back as you go.')}
                   </span>
                 </div>
               </div>
@@ -2270,11 +2371,11 @@ export default function App() {
               <div className="bg-[#EAD7B0]/30 p-3 rounded-xl border-2 border-[#17181C]/20 flex items-start gap-3">
                 <span className="font-game text-xl text-[#F6C445]">05</span>
                 <div>
-                  <span className="font-game text-sm text-[#17181C] block">DIG IN</span>
+                  <span className="font-game text-sm text-[#17181C] block">{t('DIG IN')}</span>
                   <span className="text-xs text-[#17181C]/85 font-bold">
-                    {isTouch ? 'Hold the DIG button to bury yourself. The surge rolls' : 'Hold [B] or [SHIFT], or hold the DIG button, to bury yourself. The surge rolls'}
-                    over you and costs nothing, but everything in your claws spills onto the sand
-                    and the water takes it. You cannot move or haul while you are under.
+                    {t(isTouch
+                      ? 'Hold the DIG button to bury yourself. The surge rolls over you and costs nothing, but everything in your claws spills onto the sand and the water takes it. You cannot move or haul while you are under.'
+                      : 'Hold [B] or [SHIFT], or hold the DIG button, to bury yourself. The surge rolls over you and costs nothing, but everything in your claws spills onto the sand and the water takes it. You cannot move or haul while you are under.')}
                   </span>
                 </div>
               </div>
@@ -2282,11 +2383,9 @@ export default function App() {
               <div className="bg-[#EAD7B0]/30 p-3 rounded-xl border-2 border-[#17181C]/20 flex items-start gap-3">
                 <span className="font-game text-xl text-[#24698F]">06</span>
                 <div>
-                  <span className="font-game text-sm text-[#17181C] block">OUTLAST THE SEASON</span>
+                  <span className="font-game text-sm text-[#17181C] block">{t('OUTLAST THE SEASON')}</span>
                   <span className="text-xs text-[#17181C]/85 font-bold">
-                    Survive all {SEASON_WAVES} waves, from the Shallows to the Season&apos;s End. The
-                    calm between surges keeps shrinking as you go. Lose your last heart and the
-                    surge takes you.
+                    {t("Survive all {n} waves, from the Shallows to the Season's End. The calm between surges keeps shrinking as you go. Lose your last heart and the surge takes you.", { n: SEASON_WAVES })}
                   </span>
                 </div>
               </div>
@@ -2295,35 +2394,33 @@ export default function App() {
                   shapes are the only other clue you get. */}
               <div className="bg-[#EAD7B0]/30 p-3 rounded-xl border-2 border-[#17181C]/20">
                 <span className="font-game text-sm text-[#17181C] block mb-1.5">
-                  WHAT&apos;S WORTH WHAT
+                  {t("WHAT'S WORTH WHAT")}
                 </span>
                 <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] font-bold text-[#17181C]/85">
                   <span>
-                    AMMONITE <b className="text-[#24698F]">320</b>
+                    {t('AMMONITE')} <b className="text-[#24698F]">320</b>
                   </span>
                   <span>
-                    CLAM <b className="text-[#24698F]">250</b>
+                    {t('CLAM')} <b className="text-[#24698F]">250</b>
                   </span>
                   <span>
-                    BOTTLE <b className="text-[#24698F]">180</b>
+                    {t('BOTTLE')} <b className="text-[#24698F]">180</b>
                   </span>
                   <span>
-                    SEA GLASS <b className="text-[#24698F]">140</b>
+                    {t('SEA GLASS')} <b className="text-[#24698F]">140</b>
                   </span>
                   <span>
-                    DOUBLOON <b className="text-[#24698F]">120</b>
+                    {t('DOUBLOON')} <b className="text-[#24698F]">120</b>
                   </span>
                   <span>
-                    DRIFTWOOD <b className="text-[#24698F]">80</b>
+                    {t('DRIFTWOOD')} <b className="text-[#24698F]">80</b>
                   </span>
                 </div>
                 <span className="text-[11px] font-bold text-[#17181C]/70 block mt-1.5">
-                  Base values. Your tide multiplies them, and the further up the shore you pull a
-                  piece from, the more it pays.
+                  {t('Base values. Your tide multiplies them, and the further up the shore you pull a piece from, the more it pays.')}
                 </span>
                 <span className="text-[11px] font-bold text-[#17181C] block mt-1">
-                  Taken off moving water, while the surge is on the shore: <b>1.75x</b>, and the grab
-                  says SURGE. That is the payment for the heart it can cost.
+                  {t('Taken off moving water, while the surge is on the shore: {mult}, and the grab says SURGE. That is the payment for the heart it can cost.', { mult: '1.75x' })}
                 </span>
               </div>
             </div>
@@ -2335,7 +2432,7 @@ export default function App() {
               // never be something you have to hunt for.
               className="sticky bottom-0 w-full py-3 rounded-xl bg-[#24698F] hover:bg-[#1B5575] text-white font-game text-base tracking-wider border-2 border-[#17181C] shadow-[0_4px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] transition-all cursor-pointer"
             >
-              GOT IT
+              {t('GOT IT')}
             </button>
           </div>
         </div>
@@ -2348,50 +2445,51 @@ export default function App() {
 
           {/* The headline names the cause: survived the season, or caught by a surge */}
           <h2 className={`font-game text-3xl md:text-5xl tracking-wide text-center mb-2 ${endCause === 'SURVIVED' ? 'text-[#24698F]' : 'text-[#17181C]'}`}>
-            {endCause === 'SURVIVED' ? 'OUTLASTED THE TIDE' : 'THE SURGE TOOK YOU'}
+            {endCause === 'SURVIVED' ? t('OUTLASTED THE TIDE') : t('THE SURGE TOOK YOU')}
           </h2>
           <p className="text-[10px] md:text-xs font-black text-[#17181C]/60 uppercase tracking-widest mb-5 md:mb-7 text-center">
             {endCause === 'SURVIVED'
-              ? `all ${SEASON_WAVES} waves survived · ${selectedDiff.name} tide`
-              : `caught holding loot on wave ${wavesSurvived + 1}`}
-            {runMode === 'DAILY' ? ` · ${todayTide.name}` : ''}
+              ? t('all {n} waves survived · {tide} tide', {
+                  n: SEASON_WAVES,
+                  tide: t(selectedDiff.name)
+                })
+              : t('caught holding loot on wave {wave}', { wave: wavesSurvived + 1 })}
+            {runMode === 'DAILY' ? ` · ${t(todayTide.name)}` : ''}
           </p>
 
           {/* Low-Poly Faceted Scorecard */}
           <div className="bg-[#FDFBF7] border-3 border-[#17181C] rounded-3xl shadow-[0_8px_0_#17181C] w-76 max-w-full flex flex-col items-center p-6 md:p-7 mb-7 md:mb-9">
             <span className="text-xs font-black text-[#17181C]/60 uppercase tracking-widest mb-2">
-              FINAL SCORE
+              {t('FINAL SCORE')}
             </span>
             <span className="font-game text-6xl text-[#24698F] mb-3">{bankedScore}</span>
 
             {(submitting || onlineRank !== null || deviceRank !== null) && (
               <span className="font-game text-xs tracking-widest text-white bg-[#24698F] border-2 border-[#17181C] px-3.5 py-1 rounded-lg shadow-[0_2px_0_#17181C] mb-3">
                 {submitting
-                  ? 'FILING YOUR TIDE…'
+                  ? t('FILING YOUR TIDE…')
                   : onlineRank !== null
-                    ? `TIDE RANK #${onlineRank}`
-                    : `THIS DEVICE #${deviceRank}`}
+                    ? t('TIDE RANK #{rank}', { rank: onlineRank })
+                    : t('THIS DEVICE #{rank}', { rank: deviceRank ?? 0 })}
               </span>
             )}
 
             {isNewBest && (
               <span className="font-game text-xs tracking-widest text-[#17181C] bg-[#F6C445] border-2 border-[#17181C] px-3.5 py-1 rounded-lg shadow-[0_2px_0_#17181C] mb-3">
-                NEW RECORD!
+                {t('NEW RECORD!')}
               </span>
             )}
 
             <div className="w-full pt-4 border-t-2 border-[#17181C]/15 flex justify-between gap-4 text-xs font-bold text-[#17181C]/75">
-              <span>BEST: {bestScore}</span>
-              <span>
-                WAVES: {wavesSurvived}
-              </span>
+              <span>{t('BEST: {n}', { n: bestScore })}</span>
+              <span>{t('WAVES: {n}', { n: wavesSurvived })}</span>
             </div>
           </div>
 
           {/* Near-miss framing: how close the last run came is the pull to go again */}
           {endCause === 'SURGE' && !isNewBest && bestScore > bankedScore && (
             <p className="font-game text-sm md:text-base text-[#E25B45] mb-5 md:mb-6">
-              {bestScore - bankedScore} TO BEAT YOUR BEST
+              {t('{n} TO BEAT YOUR BEST', { n: bestScore - bankedScore })}
             </p>
           )}
 
@@ -2399,10 +2497,14 @@ export default function App() {
               to pull. The board files the score either way; this is the progress. */}
           {completedMissions.length > 0 && (
             <p className="font-game text-xs md:text-sm text-[#24698F] mb-5 md:mb-6 text-center max-w-sm px-2">
-              MISSION{completedMissions.length > 1 ? 'S' : ''} CLEARED ·{' '}
-              {completedMissions
-                .map(id => todayMissions.find(mission => mission.id === id)?.label ?? id)
-                .join(' · ')}
+              {t(completedMissions.length > 1 ? 'MISSIONS CLEARED · {list}' : 'MISSION CLEARED · {list}', {
+                list: completedMissions
+                  .map(id => {
+                    const label = todayMissions.find(mission => mission.id === id)?.label ?? id;
+                    return t(label);
+                  })
+                  .join(' · ')
+              })}
             </p>
           )}
 
@@ -2413,7 +2515,7 @@ export default function App() {
                 onClick={() => startGame(selectedDiff.name === 'CALM' ? DIFFS.SURF : DIFFS.STORM, runMode)}
                 className="px-5 py-3 md:px-7 md:py-3.5 rounded-2xl bg-[#F6C445] hover:bg-[#EAD7B0] text-[#17181C] font-game text-lg md:text-xl tracking-wider border-2 border-[#17181C] shadow-[0_5px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] transition-all cursor-pointer"
               >
-                HARDER TIDE
+                {t('HARDER TIDE')}
               </button>
             )}
 
@@ -2421,14 +2523,14 @@ export default function App() {
               onClick={() => startGame(selectedDiff, runMode)}
               className="px-6 py-3 md:px-8 md:py-3.5 rounded-2xl bg-[#17181C] hover:bg-[#24698F] text-[#FFFDF8] font-game text-lg md:text-xl tracking-wider border-2 border-[#17181C] shadow-[0_5px_0_#0D0E10] active:translate-y-[2px] active:shadow-[0_1px_0_#0D0E10] transition-all cursor-pointer"
             >
-              PLAY AGAIN
+              {t('PLAY AGAIN')}
             </button>
 
             <button
               onClick={() => setAppState('TITLE')}
               className="px-5 py-3 md:px-6 md:py-3.5 rounded-2xl bg-[#FDFBF7] hover:bg-[#EAD7B0] text-[#17181C] font-game text-lg md:text-xl tracking-wider border-2 border-[#17181C] shadow-[0_5px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] transition-all cursor-pointer"
             >
-              MENU
+              {t('MENU')}
             </button>
 
             <button
@@ -2438,15 +2540,15 @@ export default function App() {
               }}
               className="px-5 py-3 md:px-6 md:py-3.5 rounded-2xl bg-[#FDFBF7] hover:bg-[#EAD7B0] text-[#17181C] font-game text-lg md:text-xl tracking-wider border-2 border-[#17181C] shadow-[0_5px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] transition-all cursor-pointer"
             >
-              BOARD
+              {t('BOARD')}
             </button>
 
             <button
               onClick={handleShare}
-              aria-label="Save a share card of this run"
+              aria-label={t('Save a share card of this run')}
               className="px-5 py-3 md:px-6 md:py-3.5 rounded-2xl bg-[#FDFBF7] hover:bg-[#EAD7B0] text-[#17181C] font-game text-lg md:text-xl tracking-wider border-2 border-[#17181C] shadow-[0_5px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] transition-all cursor-pointer"
             >
-              {cardState === 'WORKING' ? 'MAKING CARD...' : shareNote || 'SHARE'}
+              {cardState === 'WORKING' ? t('MAKING CARD...') : shareNote || t('SHARE')}
             </button>
           </div>
 
@@ -2454,25 +2556,25 @@ export default function App() {
           <p className="mt-4 text-[10px] font-black text-[#17181C]/45 uppercase tracking-widest text-center max-w-xs">
             {playerName ? (
               <>
-                the card signs as{' '}
+                {t('the card signs as')}{' '}
                 <button
                   onClick={() => {
                     setNameDraft(playerName);
                     setAskName(true);
                   }}
-                  aria-label="Change the name on your share card"
+                  aria-label={t('Change the name on your share card')}
                   className="underline decoration-dotted underline-offset-2 cursor-pointer text-[#24698F]"
                 >
                   {playerName}
                 </button>
               </>
             ) : (
-              'share asks for a name the first time, and keeps it on this device'
+              t('share asks for a name the first time, and keeps it on this device')
             )}
           </p>
 
           <p className="mt-3 text-[10px] font-black text-[#17181C]/45 uppercase tracking-widest">
-            {isTouch ? 'Tap PLAY AGAIN for another run' : 'Press R to go again'}
+            {isTouch ? t('Tap PLAY AGAIN for another run') : t('Press R to go again')}
           </p>
         </div>
       )}
@@ -2490,10 +2592,10 @@ export default function App() {
             className="bg-[#FDFBF7] border-3 border-[#17181C] rounded-3xl w-full max-w-md max-h-[88dvh] flex flex-col shadow-[0_8px_0_#17181C] overflow-hidden"
           >
             <div className="flex items-center justify-between px-5 pt-4 pb-3 border-b-2 border-[#17181C]/10">
-              <h3 className="font-game text-xl text-[#17181C] tracking-wide">TIDE BOARDS</h3>
+              <h3 className="font-game text-xl text-[#17181C] tracking-wide">{t('TIDE BOARDS')}</h3>
               <button
                 onClick={() => setBoardOpen(false)}
-                aria-label="Close the tide boards"
+                aria-label={t('Close the tide boards')}
                 className="w-8 h-8 rounded-lg bg-[#FDFBF7] hover:bg-[#EAD7B0] border-2 border-[#17181C] font-bold text-sm text-[#17181C] flex items-center justify-center cursor-pointer"
               >
                 ✕
@@ -2512,32 +2614,32 @@ export default function App() {
                       : 'bg-white text-[#17181C]/70 hover:bg-[#EAD7B0]/60 shadow-[0_2px_0_#17181C]'
                   }`}
                 >
-                  {tab === 'season' ? 'SEASON' : "TODAY'S TIDE"}
+                  {tab === 'season' ? t('SEASON') : t("TODAY'S TIDE")}
                 </button>
               ))}
             </div>
 
             <div className="px-4 pt-2.5 pb-1 flex items-center justify-between gap-2">
               <span className="text-[9px] font-black uppercase tracking-widest text-[#17181C]/55">
-                {boardOnline ? 'LIVE · EVERY PLAYER' : 'ON THIS DEVICE'}
+                {boardOnline ? t('LIVE · EVERY PLAYER') : t('ON THIS DEVICE')}
               </span>
               <span className="text-[9px] font-black uppercase tracking-widest text-[#17181C]/40">
-                {boardTab === 'daily' ? dayKey : 'BEST RUNS'}
+                {boardTab === 'daily' ? dayKey : t('BEST RUNS')}
               </span>
             </div>
 
             <div className="flex-1 overflow-y-auto px-4 pb-5">
               {boardLoading && (
                 <p className="py-8 text-center font-game text-sm text-[#17181C]/55 tracking-wider">
-                  READING THE WRACK…
+                  {t('READING THE WRACK…')}
                 </p>
               )}
 
               {!boardLoading && boardEntries.length === 0 && (
                 <p className="py-8 text-center font-game text-sm text-[#17181C]/55 tracking-wider leading-relaxed">
-                  No runs filed yet.
+                  {t('No runs filed yet.')}
                   <br />
-                  Be the first on this shore.
+                  {t('Be the first on this shore.')}
                 </p>
               )}
 
@@ -2559,12 +2661,16 @@ export default function App() {
                         {entry.name}
                         {entry.isPlayer && (
                           <span className="ml-1.5 text-[8px] font-black tracking-widest text-[#24698F] align-top">
-                            YOU
+                            {t('YOU')}
                           </span>
                         )}
                       </span>
                       <span className="text-[9px] font-black uppercase tracking-widest text-[#17181C]/45">
-                        wave {entry.waves} · {entry.tide} · {entry.date}
+                        {t('wave {wave} · {tide} · {date}', {
+                          wave: entry.waves,
+                          tide: entry.tide,
+                          date: entry.date
+                        })}
                       </span>
                     </span>
                     <span className="font-game text-base text-[#24698F] shrink-0">{entry.score}</span>
@@ -2573,7 +2679,7 @@ export default function App() {
 
               {!boardLoading && !boardOnline && boardError && (
                 <p className="pt-3 text-center text-[9px] font-black uppercase tracking-widest text-[#17181C]/35 leading-relaxed">
-                  world board unreachable — showing the best run kept here
+                  {t('world board unreachable — showing the best run kept here')}
                 </p>
               )}
             </div>
@@ -2594,10 +2700,10 @@ export default function App() {
             className="bg-[#FDFBF7] border-3 border-[#17181C] rounded-3xl w-full max-w-md max-h-[88dvh] flex flex-col shadow-[0_8px_0_#17181C] overflow-hidden"
           >
             <div className="flex items-center justify-between px-5 pt-4 pb-3 border-b-2 border-[#17181C]/10">
-              <h3 className="font-game text-xl text-[#17181C] tracking-wide">TODAY'S SHORE</h3>
+              <h3 className="font-game text-xl text-[#17181C] tracking-wide">{t("TODAY'S SHORE")}</h3>
               <button
                 onClick={() => setShowDailySheet(false)}
-                aria-label="Close today's shore"
+                aria-label={t("Close today's shore")}
                 className="w-8 h-8 rounded-lg bg-[#FDFBF7] hover:bg-[#EAD7B0] border-2 border-[#17181C] font-bold text-sm text-[#17181C] flex items-center justify-center cursor-pointer"
               >
                 ✕
@@ -2607,18 +2713,28 @@ export default function App() {
             <div className="flex-1 overflow-y-auto px-5 py-4">
               <div className="rounded-2xl border-2 border-[#17181C] bg-[#24698F] text-white px-4 py-3 shadow-[0_3px_0_#10364C] mb-4">
                 <span className="text-[9px] font-black uppercase tracking-widest opacity-75">
-                  {dayKey} · resets in {resetLabel || 'a moment'}
+                  {t('{date} · resets in {time}', {
+                    date: dayKey,
+                    time: resetLabel || t('a moment')
+                  })}
                 </span>
-                <p className="font-game text-lg tracking-wider mt-0.5">{todayTide.name}</p>
-                <p className="text-[11px] font-bold leading-snug opacity-85 mt-0.5">{todayTide.blurb}</p>
+                <p className="font-game text-lg tracking-wider mt-0.5">{t(todayTide.name)}</p>
+                <p className="text-[11px] font-bold leading-snug opacity-85 mt-0.5">
+                  {t(todayTide.blurb)}
+                </p>
               </div>
 
               <div className="flex items-center justify-between mb-2">
                 <span className="text-[9px] font-black uppercase tracking-widest text-[#17181C]/55">
-                  MISSIONS · {dailySave.done.length}/{todayMissions.length}
+                  {t('MISSIONS · {done}/{total}', {
+                    done: dailySave.done.length,
+                    total: todayMissions.length
+                  })}
                 </span>
                 <span className="text-[9px] font-black uppercase tracking-widest text-[#17181C]/55">
-                  {dailySave.streak > 0 ? `${dailySave.streak} DAY STREAK` : 'PLAY DAILY TO START A STREAK'}
+                  {dailySave.streak > 0
+                    ? t('{n} DAY STREAK', { n: dailySave.streak })
+                    : t('PLAY DAILY TO START A STREAK')}
                 </span>
               </div>
 
@@ -2632,14 +2748,14 @@ export default function App() {
                     >
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-[11px] font-bold text-[#17181C] leading-snug">
-                          {mission.label}
+                          {t(mission.label)}
                         </span>
                         <span
                           className={`text-[9px] font-black uppercase tracking-widest shrink-0 ${
                             done ? 'text-[#24698F]' : 'text-[#17181C]/40'
                           }`}
                         >
-                          {done ? 'CLEARED' : `${Math.min(value, mission.target)}/${mission.target}`}
+                          {done ? t('CLEARED') : `${Math.min(value, mission.target)}/${mission.target}`}
                         </span>
                       </div>
                       <div className="h-1.5 mt-1.5 rounded-full bg-[#17181C]/10 overflow-hidden">
@@ -2655,10 +2771,10 @@ export default function App() {
 
               <div className="flex items-center justify-between mb-2">
                 <span className="text-[9px] font-black uppercase tracking-widest text-[#17181C]/55">
-                  SHELLS · {shorePointTotal} SHORE PTS
+                  {t('SHELLS · {n} SHORE PTS', { n: shorePointTotal })}
                 </span>
                 <span className="text-[9px] font-black uppercase tracking-widest text-[#17181C]/40">
-                  EARNED BY BANKING
+                  {t('EARNED BY BANKING')}
                 </span>
               </div>
 
@@ -2666,6 +2782,7 @@ export default function App() {
                 {SHELLS.map(candidate => {
                   const unlocked = candidate.points <= shorePointTotal;
                   const isSelected = shell.id === candidate.id;
+                  const thumb = shellThumbs[candidate.color];
                   return (
                     <button
                       key={candidate.id}
@@ -2681,20 +2798,183 @@ export default function App() {
                           : 'border-[#17181C]/25 bg-white'
                       } ${unlocked ? 'cursor-pointer hover:bg-[#EAD7B0]/50' : 'opacity-55 cursor-not-allowed'}`}
                     >
-                      <span
-                        className="w-7 h-7 rounded-full border-2 border-[#17181C]/70"
-                        style={{ backgroundColor: unlocked ? candidate.color : '#C9C4BA' }}
-                      />
+                      {/* The creature itself, drawn from the same geometry as the one
+                          you play, so the shell you are buying looks like the shell you
+                          will wear. The flat disc is only the WebGL-less fallback. */}
+                      {thumb ? (
+                        <img
+                          src={thumb}
+                          alt=""
+                          draggable={false}
+                          className={`w-12 h-12 object-contain -my-1 select-none ${
+                            unlocked ? '' : 'grayscale'
+                          }`}
+                        />
+                      ) : (
+                        <span
+                          className="w-9 h-9 rounded-full border-2 border-[#17181C]/70"
+                          style={{ backgroundColor: unlocked ? candidate.color : '#C9C4BA' }}
+                        />
+                      )}
                       <span className="text-[8px] font-black uppercase tracking-wider text-[#17181C] leading-none">
-                        {candidate.name}
+                        {t(candidate.name)}
                       </span>
                       <span className="text-[8px] font-bold text-[#17181C]/45 leading-none">
-                        {unlocked ? (isSelected ? 'WORN' : 'WEAR') : `${candidate.points} PTS`}
+                        {unlocked
+                          ? isSelected
+                            ? t('WORN')
+                            : t('WEAR')
+                          : t('{n} PTS', { n: candidate.points })}
                       </span>
                     </button>
                   );
                 })}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SETTINGS. Sound, language and fullscreen live here rather than on the top
+          bar, which keeps that row to the three things a run actually reaches for.
+          Everything on this sheet is remembered on this device and nowhere else. */}
+      {settingsOpen && (
+        <div
+          className="absolute inset-0 z-[70] bg-[#17181C]/55 backdrop-blur-xs flex items-center justify-center p-4 pointer-events-auto"
+          onClick={() => setSettingsOpen(false)}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            className="bg-[#FDFBF7] border-3 border-[#17181C] rounded-3xl w-full max-w-sm shadow-[0_8px_0_#17181C] overflow-hidden"
+          >
+            <div className="flex items-center justify-between px-5 pt-4 pb-3 border-b-2 border-[#17181C]/10">
+              <h3 className="font-game text-xl text-[#17181C] tracking-wide">{t('SETTINGS')}</h3>
+              <button
+                onClick={() => setSettingsOpen(false)}
+                aria-label={t('Close settings')}
+                className="w-8 h-8 rounded-lg bg-[#FDFBF7] hover:bg-[#EAD7B0] border-2 border-[#17181C] font-bold text-sm text-[#17181C] flex items-center justify-center cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="px-4 py-4 flex flex-col gap-2.5">
+              {/* Sound */}
+              <div className="rounded-2xl border-2 border-[#17181C] bg-white px-3.5 py-3 shadow-[0_2px_0_#17181C]/15">
+                <div className="flex items-center gap-3">
+                  <span className="w-9 h-9 shrink-0 rounded-lg bg-[#EAD7B0]/60 border-2 border-[#17181C]/15 text-[#17181C] flex items-center justify-center">
+                    <IconSound muted={muted} />
+                  </span>
+                  <span className="flex-1 min-w-0">
+                    <span className="font-game text-sm text-[#17181C] tracking-wider block">
+                      {t('SOUND')}
+                    </span>
+                    <span className="text-[10px] leading-snug font-bold text-[#17181C]/55 block">
+                      {t('Waves, clicks and the shore. M toggles it anywhere.')}
+                    </span>
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-1.5 mt-2.5">
+                  {[true, false].map(on => {
+                    const selected = on ? !muted : muted;
+                    return (
+                      <button
+                        key={String(on)}
+                        onClick={() => {
+                          // A click is the gesture the browser wants before it will
+                          // make a sound, so enabling starts the audio context here.
+                          initAudio();
+                          setMuted(!on);
+                        }}
+                        aria-pressed={selected}
+                        className={`py-2 rounded-lg font-game text-xs tracking-widest border-2 border-[#17181C] transition-all cursor-pointer ${
+                          selected
+                            ? 'bg-[#24698F] text-white shadow-[0_2px_0_#10364C]'
+                            : 'bg-[#FDFBF7] text-[#17181C]/70 hover:bg-[#EAD7B0]/60 shadow-[0_2px_0_#17181C]'
+                        }`}
+                      >
+                        {on ? t('ON') : t('OFF')}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Language */}
+              <div className="rounded-2xl border-2 border-[#17181C] bg-white px-3.5 py-3 shadow-[0_2px_0_#17181C]/15">
+                <div className="flex items-center gap-3">
+                  <span className="w-9 h-9 shrink-0 rounded-lg bg-[#EAD7B0]/60 border-2 border-[#17181C]/15 text-[#17181C] font-game text-xs flex items-center justify-center">
+                    EN
+                  </span>
+                  <span className="flex-1 min-w-0">
+                    <span className="font-game text-sm text-[#17181C] tracking-wider block">
+                      {t('LANGUAGE')}
+                    </span>
+                    <span className="text-[10px] leading-snug font-bold text-[#17181C]/55 block">
+                      {t('The whole shore, labels and guide.')}
+                    </span>
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-1.5 mt-2.5">
+                  {LANGUAGES.map(option => (
+                    <button
+                      key={option.id}
+                      onClick={() => setLang(option.id)}
+                      aria-pressed={lang === option.id}
+                      // The names of languages are not translated: someone looking
+                      // for their own language has to be able to read the label.
+                      className={`py-2 rounded-lg font-game text-xs tracking-normal border-2 border-[#17181C] transition-all cursor-pointer ${
+                        lang === option.id
+                          ? 'bg-[#24698F] text-white shadow-[0_2px_0_#10364C]'
+                          : 'bg-[#FDFBF7] text-[#17181C]/70 hover:bg-[#EAD7B0]/60 shadow-[0_2px_0_#17181C]'
+                      }`}
+                    >
+                      <span
+                        className={option.id === 'my' ? 'text-sm leading-none' : undefined}
+                        // The label has to be readable from the other language, so it
+                        // always uses the Myanmar face even while the game is in English.
+                        style={{ fontFamily: "'Noto Sans Myanmar', 'Space Grotesk', system-ui, sans-serif" }}
+                      >
+                        {option.label}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Fullscreen */}
+              <div className="rounded-2xl border-2 border-[#17181C] bg-white px-3.5 py-3 shadow-[0_2px_0_#17181C]/15">
+                <div className="flex items-center gap-3">
+                  <span className="w-9 h-9 shrink-0 rounded-lg bg-[#EAD7B0]/60 border-2 border-[#17181C]/15 text-[#17181C] flex items-center justify-center">
+                    <IconExpand />
+                  </span>
+                  <span className="flex-1 min-w-0">
+                    <span className="font-game text-sm text-[#17181C] tracking-wider block">
+                      {t('FULLSCREEN')}
+                    </span>
+                    <span className="text-[10px] leading-snug font-bold text-[#17181C]/55 block">
+                      {t('Fill the screen. F toggles it anywhere.')}
+                    </span>
+                  </span>
+                </div>
+                <button
+                  onClick={toggleFullscreen}
+                  // iOS Safari has no element fullscreen on a phone; the row stays
+                  // visible but says so rather than failing silently on a tap.
+                  disabled={!fullscreenAvailable}
+                  className={`mt-2.5 w-full py-2 rounded-lg font-game text-xs tracking-widest border-2 border-[#17181C] transition-all ${
+                    fullscreenAvailable
+                      ? 'bg-[#FDFBF7] text-[#17181C] hover:bg-[#EAD7B0]/60 shadow-[0_2px_0_#17181C] cursor-pointer'
+                      : 'bg-[#EAD7B0]/40 text-[#17181C]/40 shadow-none cursor-not-allowed'
+                  }`}
+                >
+                  {isFullscreen ? t('EXIT FULLSCREEN') : t('ENTER FULLSCREEN')}
+                </button>
+              </div>
+
+              <p className="text-center text-[9px] font-black uppercase tracking-widest text-[#17181C]/35 leading-relaxed pt-0.5">
+                {t('Sound and language are saved on this device.')}
+              </p>
             </div>
           </div>
         </div>
@@ -2709,33 +2989,32 @@ export default function App() {
             className="bg-[#FDFBF7] border-3 border-[#17181C] rounded-3xl max-w-sm w-full p-6 shadow-[0_8px_0_#17181C]"
           >
             <h3 className="font-game text-2xl text-[#17181C] tracking-wide mb-2">
-              WHO IS HAULING?
+              {t('WHO IS HAULING?')}
             </h3>
             <p className="text-xs font-bold text-[#17181C]/70 mb-4">
-              Your name goes on the card. It stays on this device, like your best score:
-              no account, no server.
+              {t('Your name goes on the card. It stays on this device, like your best score: no account, no server.')}
             </p>
             <input
               autoFocus
               value={nameDraft}
               onChange={e => setNameDraft(e.target.value)}
               maxLength={16}
-              placeholder="SCUTTLER"
-              aria-label="Name to sign your share card with"
+              placeholder={t('SCUTTLER')}
+              aria-label={t('Name to sign your share card with')}
               className="w-full px-4 py-3 rounded-xl bg-[#EAD7B0]/40 border-2 border-[#17181C] font-game text-lg tracking-widest uppercase text-[#17181C] placeholder:text-[#17181C]/35 mb-4"
             />
             <button
               type="submit"
               className="w-full py-3 rounded-xl bg-[#24698F] hover:bg-[#1B5575] text-white font-game text-base tracking-wider border-2 border-[#17181C] shadow-[0_4px_0_#17181C] active:translate-y-[2px] active:shadow-none transition-all cursor-pointer mb-2"
             >
-              MAKE MY CARD
+              {t('MAKE MY CARD')}
             </button>
             <button
               type="button"
               onClick={() => setAskName(false)}
               className="w-full py-2.5 rounded-xl bg-[#FDFBF7] hover:bg-[#EAD7B0] text-[#17181C] font-game text-sm tracking-wider border-2 border-[#17181C] shadow-[0_3px_0_#17181C] active:translate-y-[2px] active:shadow-none transition-all cursor-pointer"
             >
-              NOT NOW
+              {t('NOT NOW')}
             </button>
           </form>
         </div>

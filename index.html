@@ -38,7 +38,7 @@
     <!-- Game Display Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Righteous&family=Space+Grotesk:wght@500;700;800;900&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Righteous&family=Space+Grotesk:wght@500;700;800;900&family=Noto+Sans+Myanmar:wght@400;700&display=swap" rel="stylesheet" />
 
     <style>
       /* Keep this reset inside a cascade layer. An unlayered reset beats every
@@ -74,6 +74,23 @@
       }
       .font-ui {
         font-family: 'Space Grotesk', system-ui, sans-serif;
+      }
+
+      /* Burmese. Righteous and Space Grotesk are Latin-only typesets, so every
+         Myanmar character would fall back to whatever the device happens to own.
+         The same language tag also turns the game's wide tracking down: the letter
+         spacing that makes "SURGE" read as signage pulls stacked Myanmar clusters
+         apart into broken syllables. Unlayered on purpose, so it wins over Tailwind's
+         tracking utilities; the wordmark's inline spacing still overrides it. */
+      html[lang='my'] body,
+      html[lang='my'] button,
+      html[lang='my'] input,
+      html[lang='my'] .font-game,
+      html[lang='my'] .font-ui {
+        font-family: 'Noto Sans Myanmar', 'Space Grotesk', system-ui, sans-serif;
+      }
+      html[lang='my'] * {
+        letter-spacing: 0.01em;
       }
 
       /* A phone browser's 100vh is the LARGEST viewport, not the one you can see, so a
