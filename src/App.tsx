@@ -2930,10 +2930,12 @@ export default function App() {
                       }`}
                     >
                       <span
-                        className={option.id === 'my' ? 'text-sm leading-none' : undefined}
+                        // Myanmar letters sit lower than Latin caps at the same px, so
+                        // the endonym needs a step up to match "English" beside it.
+                        className={option.id === 'my' ? 'text-base leading-none' : undefined}
                         // The label has to be readable from the other language, so it
                         // always uses the Myanmar face even while the game is in English.
-                        style={{ fontFamily: "'Noto Sans Myanmar', 'Space Grotesk', system-ui, sans-serif" }}
+                        style={{ fontFamily: "'Aka08-Regular', 'Noto Sans Myanmar', 'Space Grotesk', system-ui, sans-serif" }}
                       >
                         {option.label}
                       </span>

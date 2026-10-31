@@ -38,6 +38,7 @@
     <!-- Game Display Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Righteous&family=Space+Grotesk:wght@500;700;800;900&family=Noto+Sans+Myanmar:wght@400;700&display=swap" rel="stylesheet" />
 
     <style>
@@ -78,16 +79,35 @@
 
       /* Burmese. Righteous and Space Grotesk are Latin-only typesets, so every
          Myanmar character would fall back to whatever the device happens to own.
+         Aka08 comes from the author's own CDN rather than a copy in public/: the
+         font ships with an all-rights-reserved notice, so the safe way to embed it
+         is from the place its author publishes it. If it ever stops loading, the
+         stack falls through to Noto Sans Myanmar rather than to tofu.
          The same language tag also turns the game's wide tracking down: the letter
          spacing that makes "SURGE" read as signage pulls stacked Myanmar clusters
          apart into broken syllables. Unlayered on purpose, so it wins over Tailwind's
          tracking utilities; the wordmark's inline spacing still overrides it. */
+      @font-face {
+        font-family: 'Aka08-Regular';
+        font-weight: 400;
+        font-style: normal;
+        font-display: swap;
+        /* Myanmar blocks only. Aka08 also ships a serif Latin, and without this the
+           wordmark and every "1.0X" would swap to it; with it, Latin falls through
+           to Righteous and Space Grotesk as before. */
+        unicode-range: U+1000-109F, U+A9E0-A9FF, U+AA60-AA7F;
+        /* Aka08 draws its body about a tenth smaller than Noto at the same px, so
+           the 11-12px labels came out spindly. Scaling the face instead of the text
+           keeps every layout size in the app where it was. */
+        size-adjust: 112%;
+        src: local('A ka 08'), url('https://cdn.jsdelivr.net/gh/saturngod/myanmar-unicode-fonts@master/docs/Aka/Aka08-Regular.ttf') format('truetype');
+      }
       html[lang='my'] body,
       html[lang='my'] button,
       html[lang='my'] input,
       html[lang='my'] .font-game,
       html[lang='my'] .font-ui {
-        font-family: 'Noto Sans Myanmar', 'Space Grotesk', system-ui, sans-serif;
+        font-family: 'Aka08-Regular', 'Noto Sans Myanmar', 'Space Grotesk', system-ui, sans-serif;
       }
       html[lang='my'] * {
         letter-spacing: 0.01em;
