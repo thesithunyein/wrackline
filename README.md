@@ -242,7 +242,7 @@ Team **Solo Canvas** confirms:
    between then and 2026-10-31. No code, asset or commit was imported from an earlier project.
 2. **Not copied from another game.** The mechanics (a haul-you-can-lose loop, a wave clock, hearts,
    missions, a daily shore), the tuning, the geometry, the UI and the Web Audio graph were written
-   from scratch for this entry. The one sampled sound is AI-generated audio made for this entry and
+   from scratch for this entry. The one audio sample is AI-generated, made for this entry and
    declared in §15; it copies no existing recording. No code, art, level or data was taken from
    another game.
 3. **Not commercially available and not on any public market.** The game has never been sold,
@@ -250,10 +250,11 @@ Team **Solo Canvas** confirms:
    build with no ads, purchases, subscriptions or accounts, hosted so judges and players can open
    it; there is no commercial release.
 4. **Right to use all assets.** Every asset is original work, MIT, Apache-2.0 or SIL OFL 1.1, as
-   itemised in §11, with one disclosed exception: the Aka08 Burmese face carries no licence grant.
-   It is fetched at runtime from its author's public CDN, is not redistributed in the repository or
-   in any build, is used only for the Burmese interface, and the UI falls back to Noto Sans Myanmar
-   (SIL OFL 1.1) without it. Removing it is a one-line change.
+   itemised in §11 — with the breaker sample, which was AI-generated for this entry and is declared
+   in §15 — and with one disclosed licence exception: the Aka08 Burmese face carries no licence
+   grant. It is fetched at runtime from its author's public CDN, is not redistributed in the
+   repository or in any build, is used only for the Burmese interface, and the UI falls back to Noto
+   Sans Myanmar (SIL OFL 1.1) without it. Removing it is a one-line change.
 5. **No infringement of third-party rights.** The name WRACKLINE, the mark, the wordmark, the
    creature and the shore are original to this entry. No third-party trademarks, stock images,
    audio samples or scraped data are used; the breaker sample is generated for this entry, not
