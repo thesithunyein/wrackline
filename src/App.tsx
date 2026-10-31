@@ -17,6 +17,40 @@ import {
 import { Wrackline3D, Loot3DItem, groundHeightAt, waterSurfaceY } from './game3d';
 import { WracklineLogo } from './Logo';
 import { buildShareCard, sanitizeName, shareFileName, ShareCardData } from './shareCard';
+import { mmtDayKey, msUntilNextMmtDay } from './game/clock';
+import {
+  SEASON_MOD,
+  SHELLS,
+  applyRun,
+  dailyMissionsFor,
+  dailySeed,
+  dailyTideFor,
+  loadDailySave,
+  loadShellId,
+  missionProgress,
+  mulberry32,
+  resolveShell,
+  saveDailySave,
+  saveShellId,
+  shorePoints,
+  unlockedShells,
+  type DailySave,
+  type MissionDef,
+  type RunSummary,
+  type TideMod
+} from './game/retention';
+import {
+  createRunId,
+  ensurePlayerName,
+  fetchBoard,
+  getPlayerId,
+  loadLocalBoard,
+  markPlayerEntry,
+  saveLocalRun,
+  submitRun,
+  syncPlayerName
+} from './game/leaderboard';
+import type { BoardEntry, BoardId } from './game/leaderboardCore';
 
 interface DiffConfig {
   name: string;
@@ -203,6 +237,25 @@ const IconExpand: React.FC = () => (
   </svg>
 );
 
+const IconBoard: React.FC = () => (
+  <svg
+    viewBox="0 0 24 24"
+    className="w-5 h-5"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={2.1}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M8 20h8" />
+    <path d="M12 16v4" />
+    <path d="M7 4h10v4.5a5 5 0 01-10 0z" />
+    <path d="M7 5.5H4v1.5a3 3 0 003 3" />
+    <path d="M17 5.5h3v1.5a3 3 0 01-3 3" />
+  </svg>
+);
+
 export default function App() {
   const [appState, setAppState] = useState<'LOADING' | 'TITLE' | 'PLAYING' | 'DEAD' | 'WIN' | 'ERROR'>(
     'LOADING'
@@ -257,6 +310,39 @@ export default function App() {
   const [askName, setAskName] = useState<boolean>(false);
   const [nameDraft, setNameDraft] = useState<string>('');
   const [cardState, setCardState] = useState<'IDLE' | 'WORKING' | 'SAVED' | 'FAILED'>('IDLE');
+
+  // The season, or today's tide. The daily tide is one modifier seeded from the
+  // MMT date, so everyone who plays today plays the same shore and the daily
+  // board compares like with like. All three are refreshed when a new run starts,
+  // so a tab left open overnight starts the next day's shore rather than yesterday's.
+  const [runMode, setRunMode] = useState<'SEASON' | 'DAILY'>('SEASON');
+  const [dayKey, setDayKey] = useState<string>(() => mmtDayKey());
+  const [todayTide, setTodayTide] = useState<TideMod>(() => dailyTideFor(mmtDayKey()));
+  const [todayMissions, setTodayMissions] = useState<MissionDef[]>(() => dailyMissionsFor(mmtDayKey()));
+  const [dailySave, setDailySave] = useState<DailySave>(() => loadDailySave());
+  const dailySaveRef = useRef<DailySave>(dailySave);
+  const playerNameRef = useRef<string>('');
+  const [completedMissions, setCompletedMissions] = useState<string[]>([]);
+  const [showDailySheet, setShowDailySheet] = useState<boolean>(false);
+  const [resetLabel, setResetLabel] = useState<string>('');
+
+  // The tide boards. `online` is only ever true when the endpoint admitted to
+  // durable storage; otherwise the sheet shows the device's own best.
+  const [boardOpen, setBoardOpen] = useState<boolean>(false);
+  const [boardTab, setBoardTab] = useState<BoardId>('season');
+  const [boardEntries, setBoardEntries] = useState<BoardEntry[]>([]);
+  const [boardOnline, setBoardOnline] = useState<boolean>(false);
+  const [boardLoading, setBoardLoading] = useState<boolean>(false);
+  const [boardError, setBoardError] = useState<string>('');
+  const [onlineRank, setOnlineRank] = useState<number | null>(null);
+  // Where the run landed on the device's own board, shown when the world board
+  // cannot be reached: a score with no rank at all reads like it was not counted.
+  const [deviceRank, setDeviceRank] = useState<number | null>(null);
+  const [submitting, setSubmitting] = useState<boolean>(false);
+
+  const [shellId, setShellId] = useState<string | null>(() => loadShellId());
+  const shorePointTotal = shorePoints(dailySave);
+  const shell = resolveShell(shorePointTotal, shellId);
 
   // Active key state for UI visual feedback on buttons
   const [activeKeys, setActiveKeys] = useState({
@@ -314,6 +400,17 @@ export default function App() {
     hasGivenFirstInput: false,
     deathTime: 0,
 
+    // Which shore this is, and the dice it rolls. A daily tide seeds its own
+    // randomness so the wrack lands in the same places for everyone.
+    runMode: 'SEASON' as 'SEASON' | 'DAILY',
+    mods: SEASON_MOD,
+    rng: Math.random as () => number,
+    surgeGrabs: 0,
+    kingBanks: 0,
+    itemsHauled: 0,
+    dug: false,
+    runStart: 0,
+
     playerX3D: 0.0,
     isMoving: false,
     moveDir: 0,
@@ -337,6 +434,57 @@ export default function App() {
   useEffect(() => {
     stateRef.current.best = bestScore;
   }, [bestScore]);
+
+  useEffect(() => {
+    dailySaveRef.current = dailySave;
+  }, [dailySave]);
+
+  useEffect(() => {
+    playerNameRef.current = playerName;
+  }, [playerName]);
+
+  // The carapace colour is the whole of the unlock track's payoff, and it has to
+  // survive a run starting: the shell is rebuilt only when the engine is.
+  useEffect(() => {
+    engine3dRef.current?.setShellColor(shell.color);
+  }, [shell.color]);
+
+  // How long until tomorrow's shore. Ticked only while the sheet is open, so the
+  // countdown is right when it is read and costs nothing when it is not.
+  useEffect(() => {
+    if (!showDailySheet) return;
+    const tick = () => {
+      const minutes = Math.max(0, Math.ceil(msUntilNextMmtDay() / 60_000));
+      const hours = Math.floor(minutes / 60);
+      setResetLabel(hours > 0 ? `${hours}H ${minutes % 60}M` : `${minutes}M`);
+    };
+    tick();
+    const timer = window.setInterval(tick, 30_000);
+    return () => window.clearInterval(timer);
+  }, [showDailySheet]);
+
+  // The board is fetched only when it is actually opened, so a first visit never
+  // pays for a request it will not look at.
+  useEffect(() => {
+    if (!boardOpen) return;
+    let alive = true;
+    setBoardLoading(true);
+    setBoardError('');
+    fetchBoard(boardTab).then(result => {
+      if (!alive) return;
+      setBoardOnline(result.online);
+      if (result.online) {
+        setBoardEntries(markPlayerEntry(result.entries, getPlayerId()));
+      } else {
+        setBoardEntries(loadLocalBoard());
+        setBoardError(result.error || '');
+      }
+      setBoardLoading(false);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [boardOpen, boardTab]);
 
   // Loading Screen Progression
   useEffect(() => {
@@ -407,15 +555,18 @@ export default function App() {
     }
     s.loot3D = s.loot3D.filter(i => i.isAttached);
 
-    const baseCount = Math.floor(4 + Math.random() * 3 + s.waveIndex * 0.8);
-    const count = Math.min(10, baseCount);
+    const mods = s.mods;
+    const rng = s.rng;
+
+    const baseCount = Math.floor(4 + rng() * 3 + s.waveIndex * 0.8) + mods.lootCount;
+    const count = Math.max(3, Math.min(10, baseCount));
 
     const types = [0, 1, 2, 3, 4, 6]; // Ammonite, Glass, Doubloon, Driftwood, Clam, Bottle
 
     // The wrack lands on the sand the tide can actually leave it on: see the WRACK_NEAR_X
     // and WRACK_FAR_X notes above for why the band is where it is.
     for (let i = 0; i < count; i++) {
-      const typeIndex = types[Math.floor(Math.random() * types.length)];
+      const typeIndex = types[Math.floor(rng() * types.length)];
 
       // Spread the pieces across the sand instead of marching them out to sea. The
       // gradient from the near piece to the one at the waterline IS the reward for
@@ -425,9 +576,9 @@ export default function App() {
       const spread = i / Math.max(1, count - 1);
       const spawnX = Math.min(
         WRACK_FAR_X,
-        WRACK_NEAR_X + (WRACK_FAR_X - WRACK_NEAR_X) * spread + (Math.random() - 0.5) * 1.2
+        WRACK_NEAR_X + (WRACK_FAR_X - WRACK_NEAR_X) * spread + (rng() - 0.5) * 1.2
       );
-      const spawnZ = (Math.random() - 0.5) * 11;
+      const spawnZ = (rng() - 0.5) * 11;
       const groundY = groundHeightAt(spawnX, spawnZ) + 0.3;
 
       // The sparkle marker rides the pieces that carry the most risk, so it is read
@@ -450,12 +601,13 @@ export default function App() {
 
       // Risk pays. The surge arrives from the seaward end and takes the furthest loot
       // first, so the further up the shore a piece sits the less time there is to
-      // reach it, and the more it is worth for the trouble.
+      // reach it, and the more it is worth for the trouble. The daily tide's own
+      // multiplier is applied here, once, so nothing downstream has to know about it.
       const risk = Math.max(0, Math.min(1, shoreFrac));
-      const val = Math.round(baseVal * s.currentDiff.multiplier * (1 + risk * 1.2));
+      const val = Math.round(baseVal * s.currentDiff.multiplier * (1 + risk * 1.2) * mods.lootValue);
 
       s.loot3D.push({
-        id: Date.now() + i + Math.random(),
+        id: Date.now() + i + rng(),
         mesh,
         type: typeIndex,
         band,
@@ -466,8 +618,8 @@ export default function App() {
         z: spawnZ,
         origX: spawnX,
         isAttached: false,
-        attachAngle: Math.random() * Math.PI * 2,
-        attachElev: (Math.random() - 0.5) * 0.8
+        attachAngle: rng() * Math.PI * 2,
+        attachElev: (rng() - 0.5) * 0.8
       });
     }
   }, []);
@@ -483,7 +635,7 @@ export default function App() {
     // every wave after it played identically; the floor now sits out past the last
     // wave and the closing waves are genuinely thin.
     const waveFactor = Math.max(0.42, 1 - s.waveIndex * 0.045);
-    s.phaseDuration = s.currentDiff.baseLowTide * waveFactor;
+    s.phaseDuration = s.currentDiff.baseLowTide * waveFactor * s.mods.lowTide;
 
     // King Tide is rolled, not scheduled. Odds climb as the run goes on so late
     // waves feel the most dangerous, it never lands twice in a row, and a pity
@@ -498,7 +650,7 @@ export default function App() {
       if (s.dryWaves >= KING_TIDE_PITY_WAVES) {
         isKing = true;
       } else if (!s.lastWaveWasKing) {
-        isKing = Math.random() < Math.min(0.45, 0.18 + s.waveIndex * 0.03);
+        isKing = s.rng() < Math.min(0.45, (0.18 + s.waveIndex * 0.03) * s.mods.kingOdds);
       }
     }
 
@@ -515,7 +667,10 @@ export default function App() {
 
     // Announce the wave you have just walked into. This is progress, not danger. The
     // water carries the danger now, and it is what gives the season its rungs.
-    setWaveIntro(`WAVE ${s.waveIndex + 1} · ${tierForWave(s.waveIndex + 1)} · ${s.currentDiff.name}`);
+    setWaveIntro(
+      `WAVE ${s.waveIndex + 1} · ${tierForWave(s.waveIndex + 1)} · ${s.currentDiff.name}` +
+        (s.runMode === 'DAILY' ? ` · ${s.mods.name}` : '')
+    );
     if (introTimerRef.current !== null) window.clearTimeout(introTimerRef.current);
     introTimerRef.current = window.setTimeout(() => setWaveIntro(null), 1800);
   }, [spawnCycleLoot]);
@@ -524,9 +679,9 @@ export default function App() {
     const s = stateRef.current;
     s.cyclePhase = 'WARNING';
     s.phaseTimer = 0;
-    s.phaseDuration = s.currentDiff.warningDuration;
+    s.phaseDuration = s.currentDiff.warningDuration * s.mods.warning;
     setIsWaveWarning(true);
-    startRumble(s.currentDiff.warningDuration);
+    startRumble(s.phaseDuration);
   }, []);
 
   const enterSweep = useCallback(() => {
@@ -566,7 +721,69 @@ export default function App() {
       playDeath();
     }
     checkSaveBest(s.banked);
-  }, [checkSaveBest]);
+
+    // One finished tide feeds three things that outlive it: today's missions, the
+    // on-device board, and — when the endpoint has durable storage — the world board.
+    const summary: RunSummary = {
+      score: s.banked,
+      waves: s.waveIndex,
+      survived: cause === 'SURVIVED',
+      surgeGrabs: s.surgeGrabs,
+      kingBanks: s.kingBanks,
+      itemsHauled: s.itemsHauled,
+      dug: s.dug
+    };
+
+    // The day the score will be filed under is the day the server will compute,
+    // so the missions folded here use that day's shore too.
+    const today = mmtDayKey();
+    const folded = applyRun(
+      dailySaveRef.current,
+      today,
+      summary,
+      today === dayKey ? todayMissions : dailyMissionsFor(today),
+      s.runMode === 'DAILY'
+    );
+    dailySaveRef.current = folded.save;
+    saveDailySave(folded.save);
+    setDailySave(folded.save);
+    setCompletedMissions(folded.completed);
+
+    // A run that banked nothing is not a score: the board only takes positive tides.
+    if (s.banked <= 0) {
+      setOnlineRank(null);
+      setDeviceRank(null);
+      return;
+    }
+
+    const name = ensurePlayerName();
+    if (name !== playerNameRef.current) setPlayerName(name);
+
+    const run = {
+      playerId: getPlayerId(),
+      runId: createRunId(),
+      name,
+      score: s.banked,
+      waves: s.waveIndex,
+      tide: s.currentDiff.name,
+      durationMs: Math.max(0, Date.now() - s.runStart)
+    };
+
+    setDeviceRank(saveLocalRun(run).rank || null);
+    setSubmitting(true);
+    void submitRun(s.runMode === 'DAILY' ? 'daily' : 'season', run)
+      .then(result => {
+        setSubmitting(false);
+        if (!result.ok) {
+          setOnlineRank(null);
+          return;
+        }
+        setOnlineRank(result.rank);
+        setBoardOnline(true);
+        setBoardEntries(markPlayerEntry(result.entries, run.playerId));
+      })
+      .catch(() => setSubmitting(false));
+  }, [checkSaveBest, todayMissions, dayKey]);
 
   const finishCycle = useCallback(() => {
     const s = stateRef.current;
@@ -587,11 +804,34 @@ export default function App() {
   }, [endRun, enterLowTide]);
 
   // Start / Restart Game
-  const startGame = useCallback((diff: DiffConfig) => {
+  const startGame = useCallback((diff: DiffConfig, mode: 'SEASON' | 'DAILY' = 'SEASON') => {
     initAudio();
     const s = stateRef.current;
+
+    // A tab can outlive its day. If the Myanmar date has turned since this screen
+    // was drawn, the run starts on the new shore: yesterday's tide and missions
+    // must not be handed out tomorrow.
+    const today = mmtDayKey();
+    const tide = today === dayKey ? todayTide : dailyTideFor(today);
+    if (today !== dayKey) {
+      setDayKey(today);
+      setTodayTide(tide);
+      setTodayMissions(dailyMissionsFor(today));
+    }
+
     s.gameState = 'PLAYING';
     s.currentDiff = diff;
+    s.runMode = mode;
+    // The daily tide is one modifier and one seeded shore: everyone who plays it
+    // today gets the same rules and the same wrack, which is what makes its board
+    // a fair comparison rather than a draw from the same dice.
+    s.mods = mode === 'DAILY' ? tide : SEASON_MOD;
+    s.rng = mode === 'DAILY' ? mulberry32(dailySeed(today)) : Math.random;
+    s.surgeGrabs = 0;
+    s.kingBanks = 0;
+    s.itemsHauled = 0;
+    s.dug = false;
+    s.runStart = Date.now();
     s.banked = 0;
     s.held = 0;
     s.waveIndex = 0;
@@ -616,6 +856,7 @@ export default function App() {
 
     setAppState('PLAYING');
     setSelectedDiff(diff);
+    setRunMode(mode);
     setBankedScore(0);
     setDisplayedBanked(0);
     setHeldScore(0);
@@ -633,6 +874,9 @@ export default function App() {
     setWaveIntro(null);
     setPaused(false);
     pausedRef.current = false;
+    setCompletedMissions([]);
+    setOnlineRank(null);
+    setDeviceRank(null);
     if (introTimerRef.current !== null) window.clearTimeout(introTimerRef.current);
 
     if (engine3dRef.current) {
@@ -643,7 +887,7 @@ export default function App() {
     s.loot3D = [];
 
     enterLowTide();
-  }, [enterLowTide]);
+  }, [enterLowTide, todayTide, dayKey]);
 
   // Bank Held Score
   const bankHeldScore = useCallback(() => {
@@ -653,10 +897,12 @@ export default function App() {
 
     let earned = 0;
     for (const item of s.attached3D) earned += item.val;
+    s.itemsHauled += s.attached3D.length;
 
     const isKing = s.isKingTide;
     if (isKing) {
       earned *= 2;
+      s.kingBanks += 1;
     }
 
     // Snuck it: banking in the last breath of the warning, with the surge already moving.
@@ -860,7 +1106,7 @@ export default function App() {
         (code === 'KeyR' || code === 'Enter') &&
         (stateRef.current.gameState === 'DEAD' || stateRef.current.gameState === 'WIN')
       ) {
-        startGame(stateRef.current.currentDiff);
+        startGame(stateRef.current.currentDiff, stateRef.current.runMode);
         return;
       }
 
@@ -991,6 +1237,7 @@ export default function App() {
               s.digging = false;
               s.digTimer = 0;
               s.isBurrowed = true;
+              s.dug = true;
               setBurrowed(true);
               playWrackCrunch();
 
@@ -1063,6 +1310,8 @@ export default function App() {
                 item.isAttached = true;
                 s.attached3D.push(item);
                 s.held += item.val;
+                s.itemsHauled += 1;
+                if (tookFromSurge) s.surgeGrabs += 1;
                 setHeldScore(s.held);
                 playTick();
 
@@ -1387,6 +1636,9 @@ export default function App() {
       }
       setAskName(false);
       void saveShareCard(clean);
+      // The board row carries the same name, so renaming the card renames the
+      // player on the world board too. Best-effort: the device keeps it regardless.
+      void syncPlayerName(getPlayerId(), clean);
     },
     [nameDraft, saveShareCard]
   );
@@ -1419,8 +1671,11 @@ export default function App() {
         }
       />
 
-      {/* Top Header Controls: Low-Poly Tactile 3D Buttons */}
-      <div className="absolute top-[max(1rem,env(safe-area-inset-top))] right-[max(1rem,env(safe-area-inset-right))] md:top-5 md:right-5 z-40 flex items-center gap-2 md:gap-3">
+      {/* Top Header Controls: Low-Poly Tactile 3D Buttons.
+          z-50, above the title card's overlay but below the end screen and the
+          sheets: the guide, sound, fullscreen and board buttons have to work from
+          the menu, which is the screen a first-time player is looking at. */}
+      <div className="absolute top-[max(1rem,env(safe-area-inset-top))] right-[max(1rem,env(safe-area-inset-right))] md:top-5 md:right-5 z-50 flex items-center gap-2 md:gap-3">
         <button
           onClick={() => setShowGuide(prev => !prev)}
           title="Guide & Controls (H)"
@@ -1446,6 +1701,15 @@ export default function App() {
           className="w-10 h-10 md:w-11 md:h-11 rounded-xl bg-[#FDFBF7] hover:bg-[#EAD7B0] border-2 border-[#17181C] shadow-[0_3px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] text-[#17181C] text-base flex items-center justify-center transition-all cursor-pointer"
         >
           <IconExpand />
+        </button>
+
+        <button
+          onClick={() => setBoardOpen(true)}
+          title="Tide boards"
+          aria-label="Open the tide boards"
+          className="w-10 h-10 md:w-11 md:h-11 rounded-xl bg-[#FDFBF7] hover:bg-[#EAD7B0] border-2 border-[#17181C] shadow-[0_3px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] text-[#17181C] flex items-center justify-center transition-all cursor-pointer"
+        >
+          <IconBoard />
         </button>
       </div>
 
@@ -1525,10 +1789,32 @@ export default function App() {
 
           {/* Center Zone: Single Prominent PLAY Button + Labeled Tide Selector */}
           <div className="flex flex-1 flex-col items-center justify-center w-full max-w-xs my-3 md:my-auto md:max-w-sm">
+            {/* Which shore PLAY starts. The daily tide is the same shore, seeded from
+                today's date, for everyone who plays it before the day turns. */}
+            <div className="grid grid-cols-2 gap-2 w-full mb-3">
+              {(['SEASON', 'DAILY'] as const).map(mode => {
+                const isSelected = runMode === mode;
+                return (
+                  <button
+                    key={mode}
+                    onClick={() => setRunMode(mode)}
+                    aria-pressed={isSelected}
+                    className={`py-2 rounded-xl font-game text-sm tracking-widest border-2 border-[#17181C] transition-all cursor-pointer ${
+                      isSelected
+                        ? 'bg-[#17181C] text-[#FFFDF8] shadow-[0_3px_0_#0D0E10] translate-y-[-1px]'
+                        : 'bg-[#FDFBF7]/90 text-[#17181C]/70 hover:bg-[#EAD7B0]/60 shadow-[0_2px_0_#17181C]'
+                    }`}
+                  >
+                    {mode === 'SEASON' ? 'SEASON' : 'DAILY TIDE'}
+                  </button>
+                );
+              })}
+            </div>
+
             {/* Primary Action Button: Clear, Big, Unmistakable Breathing Room */}
             <button
-              onClick={() => startGame(selectedDiff)}
-              className="w-full py-4 md:py-5 rounded-2xl bg-[#17181C] hover:bg-[#24698F] text-[#FFFDF8] font-game text-2xl md:text-3xl tracking-widest border-2 border-[#17181C] shadow-[0_6px_0_#0D0E10] hover:shadow-[0_8px_0_#0D0E10] active:translate-y-[3px] active:shadow-[0_2px_0_#0D0E10] transition-all cursor-pointer flex items-center justify-center gap-3 mb-7 md:mb-9"
+              onClick={() => startGame(selectedDiff, runMode)}
+              className="w-full py-4 md:py-5 rounded-2xl bg-[#17181C] hover:bg-[#24698F] text-[#FFFDF8] font-game text-2xl md:text-3xl tracking-widest border-2 border-[#17181C] shadow-[0_6px_0_#0D0E10] hover:shadow-[0_8px_0_#0D0E10] active:translate-y-[3px] active:shadow-[0_2px_0_#0D0E10] transition-all cursor-pointer flex items-center justify-center gap-3 mb-5 md:mb-7"
             >
               <span>▶</span>
               <span>PLAY</span>
@@ -1560,6 +1846,31 @@ export default function App() {
                 })}
               </div>
             </div>
+
+            {/* Today's tide, and the reason to come back tomorrow. One line on a phone,
+                opening the sheet that holds the missions and the shell track. */}
+            <button
+              onClick={() => setShowDailySheet(true)}
+              className="w-full mt-3 flex items-center justify-between gap-3 bg-[#FDFBF7]/90 backdrop-blur-xs px-3.5 py-2.5 rounded-2xl border-2 border-[#17181C] shadow-[0_3px_0_#17181C] hover:bg-[#EAD7B0]/60 active:translate-y-[1px] active:shadow-[0_2px_0_#17181C] transition-all cursor-pointer text-left"
+              aria-label="Open today's tide, missions and shells"
+            >
+              <span className="flex flex-col leading-tight">
+                <span className="text-[9px] font-black text-[#17181C]/55 uppercase tracking-widest">
+                  TODAY'S TIDE
+                </span>
+                <span className="font-game text-sm tracking-wider text-[#24698F]">
+                  {todayTide.name}
+                </span>
+              </span>
+              <span className="flex flex-col items-end leading-tight">
+                <span className="text-[9px] font-black text-[#17181C]/55 uppercase tracking-widest">
+                  {dailySave.streak > 0 ? `${dailySave.streak} DAY STREAK` : 'NO STREAK'}
+                </span>
+                <span className="font-game text-sm tracking-wider text-[#17181C]">
+                  {dailySave.done.length}/{todayMissions.length} MISSIONS
+                </span>
+              </span>
+            </button>
           </div>
 
           {/* Bottom Zone: Instant Guide - Immediately Explains What Game Is For.
@@ -1795,7 +2106,7 @@ export default function App() {
           {/* Pause. The game pauses itself when the tab goes away, so this card is
               mostly reached for deliberately, to answer a message mid-run. */}
           {paused && (
-            <div className="absolute inset-0 z-40 bg-[#D4E6F4]/75 backdrop-blur-[2px] flex flex-col items-center justify-center pointer-events-auto">
+            <div className="absolute inset-0 z-50 bg-[#D4E6F4]/75 backdrop-blur-[2px] flex flex-col items-center justify-center pointer-events-auto">
               <span className="font-game text-4xl md:text-5xl text-[#17181C] tracking-widest mb-2">
                 PAUSED
               </span>
@@ -1976,6 +2287,7 @@ export default function App() {
             {endCause === 'SURVIVED'
               ? `all ${SEASON_WAVES} waves survived · ${selectedDiff.name} tide`
               : `caught holding loot on wave ${wavesSurvived + 1}`}
+            {runMode === 'DAILY' ? ` · ${todayTide.name}` : ''}
           </p>
 
           {/* Low-Poly Faceted Scorecard */}
@@ -1984,6 +2296,16 @@ export default function App() {
               FINAL SCORE
             </span>
             <span className="font-game text-6xl text-[#24698F] mb-3">{bankedScore}</span>
+
+            {(submitting || onlineRank !== null || deviceRank !== null) && (
+              <span className="font-game text-xs tracking-widest text-white bg-[#24698F] border-2 border-[#17181C] px-3.5 py-1 rounded-lg shadow-[0_2px_0_#17181C] mb-3">
+                {submitting
+                  ? 'FILING YOUR TIDE…'
+                  : onlineRank !== null
+                    ? `TIDE RANK #${onlineRank}`
+                    : `THIS DEVICE #${deviceRank}`}
+              </span>
+            )}
 
             {isNewBest && (
               <span className="font-game text-xs tracking-widest text-[#17181C] bg-[#F6C445] border-2 border-[#17181C] px-3.5 py-1 rounded-lg shadow-[0_2px_0_#17181C] mb-3">
@@ -2006,11 +2328,22 @@ export default function App() {
             </p>
           )}
 
+          {/* The missions this run just cleared, named so the next visit has a thread
+              to pull. The board files the score either way; this is the progress. */}
+          {completedMissions.length > 0 && (
+            <p className="font-game text-xs md:text-sm text-[#24698F] mb-5 md:mb-6 text-center max-w-sm px-2">
+              MISSION{completedMissions.length > 1 ? 'S' : ''} CLEARED ·{' '}
+              {completedMissions
+                .map(id => todayMissions.find(mission => mission.id === id)?.label ?? id)
+                .join(' · ')}
+            </p>
+          )}
+
           {/* Low-Poly Tactile Action Buttons */}
           <div className="flex flex-wrap items-center justify-center gap-3 md:gap-5">
             {endCause === 'SURVIVED' && (
               <button
-                onClick={() => startGame(selectedDiff.name === 'CALM' ? DIFFS.SURF : DIFFS.STORM)}
+                onClick={() => startGame(selectedDiff.name === 'CALM' ? DIFFS.SURF : DIFFS.STORM, runMode)}
                 className="px-5 py-3 md:px-7 md:py-3.5 rounded-2xl bg-[#F6C445] hover:bg-[#EAD7B0] text-[#17181C] font-game text-lg md:text-xl tracking-wider border-2 border-[#17181C] shadow-[0_5px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] transition-all cursor-pointer"
               >
                 HARDER TIDE
@@ -2018,7 +2351,7 @@ export default function App() {
             )}
 
             <button
-              onClick={() => startGame(selectedDiff)}
+              onClick={() => startGame(selectedDiff, runMode)}
               className="px-6 py-3 md:px-8 md:py-3.5 rounded-2xl bg-[#17181C] hover:bg-[#24698F] text-[#FFFDF8] font-game text-lg md:text-xl tracking-wider border-2 border-[#17181C] shadow-[0_5px_0_#0D0E10] active:translate-y-[2px] active:shadow-[0_1px_0_#0D0E10] transition-all cursor-pointer"
             >
               PLAY AGAIN
@@ -2029,6 +2362,16 @@ export default function App() {
               className="px-5 py-3 md:px-6 md:py-3.5 rounded-2xl bg-[#FDFBF7] hover:bg-[#EAD7B0] text-[#17181C] font-game text-lg md:text-xl tracking-wider border-2 border-[#17181C] shadow-[0_5px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] transition-all cursor-pointer"
             >
               MENU
+            </button>
+
+            <button
+              onClick={() => {
+                setBoardTab(runMode === 'DAILY' ? 'daily' : 'season');
+                setBoardOpen(true);
+              }}
+              className="px-5 py-3 md:px-6 md:py-3.5 rounded-2xl bg-[#FDFBF7] hover:bg-[#EAD7B0] text-[#17181C] font-game text-lg md:text-xl tracking-wider border-2 border-[#17181C] shadow-[0_5px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] transition-all cursor-pointer"
+            >
+              BOARD
             </button>
 
             <button
@@ -2064,6 +2407,229 @@ export default function App() {
           <p className="mt-3 text-[10px] font-black text-[#17181C]/45 uppercase tracking-widest">
             {isTouch ? 'Tap PLAY AGAIN for another run' : 'Press R to go again'}
           </p>
+        </div>
+      )}
+
+      {/* THE TIDE BOARDS. Two boards behind one endpoint: the season, and today's
+          shore. The label under the tabs says which one the rows came from, so a
+          score is never shown as world-filed when it is only held on this device. */}
+      {boardOpen && (
+        <div
+          className="absolute inset-0 z-[70] bg-[#17181C]/55 backdrop-blur-xs flex items-center justify-center p-4 pointer-events-auto"
+          onClick={() => setBoardOpen(false)}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            className="bg-[#FDFBF7] border-3 border-[#17181C] rounded-3xl w-full max-w-md max-h-[88dvh] flex flex-col shadow-[0_8px_0_#17181C] overflow-hidden"
+          >
+            <div className="flex items-center justify-between px-5 pt-4 pb-3 border-b-2 border-[#17181C]/10">
+              <h3 className="font-game text-xl text-[#17181C] tracking-wide">TIDE BOARDS</h3>
+              <button
+                onClick={() => setBoardOpen(false)}
+                aria-label="Close the tide boards"
+                className="w-8 h-8 rounded-lg bg-[#FDFBF7] hover:bg-[#EAD7B0] border-2 border-[#17181C] font-bold text-sm text-[#17181C] flex items-center justify-center cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 px-4 pt-3">
+              {(['season', 'daily'] as const).map(tab => (
+                <button
+                  key={tab}
+                  onClick={() => setBoardTab(tab)}
+                  aria-pressed={boardTab === tab}
+                  className={`py-2 rounded-xl font-game text-sm tracking-widest border-2 border-[#17181C] transition-all cursor-pointer ${
+                    boardTab === tab
+                      ? 'bg-[#24698F] text-white shadow-[0_2px_0_#10364C]'
+                      : 'bg-white text-[#17181C]/70 hover:bg-[#EAD7B0]/60 shadow-[0_2px_0_#17181C]'
+                  }`}
+                >
+                  {tab === 'season' ? 'SEASON' : "TODAY'S TIDE"}
+                </button>
+              ))}
+            </div>
+
+            <div className="px-4 pt-2.5 pb-1 flex items-center justify-between gap-2">
+              <span className="text-[9px] font-black uppercase tracking-widest text-[#17181C]/55">
+                {boardOnline ? 'LIVE · EVERY PLAYER' : 'ON THIS DEVICE'}
+              </span>
+              <span className="text-[9px] font-black uppercase tracking-widest text-[#17181C]/40">
+                {boardTab === 'daily' ? dayKey : 'BEST RUNS'}
+              </span>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-4 pb-5">
+              {boardLoading && (
+                <p className="py-8 text-center font-game text-sm text-[#17181C]/55 tracking-wider">
+                  READING THE WRACK…
+                </p>
+              )}
+
+              {!boardLoading && boardEntries.length === 0 && (
+                <p className="py-8 text-center font-game text-sm text-[#17181C]/55 tracking-wider leading-relaxed">
+                  No runs filed yet.
+                  <br />
+                  Be the first on this shore.
+                </p>
+              )}
+
+              {!boardLoading &&
+                boardEntries.map((entry, index) => (
+                  <div
+                    key={entry.id}
+                    className={`flex items-center gap-3 px-3 py-2.5 my-1.5 rounded-xl border-2 border-[#17181C] ${
+                      entry.isPlayer
+                        ? 'bg-[#F6C445]/45 shadow-[0_2px_0_#17181C]'
+                        : 'bg-white shadow-[0_2px_0_#17181C]/25'
+                    }`}
+                  >
+                    <span className="font-game text-lg text-[#17181C]/55 w-7 text-right shrink-0">
+                      {index + 1}
+                    </span>
+                    <span className="flex flex-col leading-tight flex-1 min-w-0">
+                      <span className="font-game text-sm text-[#17181C] tracking-wider truncate">
+                        {entry.name}
+                        {entry.isPlayer && (
+                          <span className="ml-1.5 text-[8px] font-black tracking-widest text-[#24698F] align-top">
+                            YOU
+                          </span>
+                        )}
+                      </span>
+                      <span className="text-[9px] font-black uppercase tracking-widest text-[#17181C]/45">
+                        wave {entry.waves} · {entry.tide} · {entry.date}
+                      </span>
+                    </span>
+                    <span className="font-game text-base text-[#24698F] shrink-0">{entry.score}</span>
+                  </div>
+                ))}
+
+              {!boardLoading && !boardOnline && boardError && (
+                <p className="pt-3 text-center text-[9px] font-black uppercase tracking-widest text-[#17181C]/35 leading-relaxed">
+                  world board unreachable — showing the best run kept here
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TODAY'S SHORE. The modifier, the streak, the three missions and the shell
+          track, all in one place. Everything on it is already saved locally, so it
+          reads the same offline as on. */}
+      {showDailySheet && (
+        <div
+          className="absolute inset-0 z-[70] bg-[#17181C]/55 backdrop-blur-xs flex items-center justify-center p-4 pointer-events-auto"
+          onClick={() => setShowDailySheet(false)}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            className="bg-[#FDFBF7] border-3 border-[#17181C] rounded-3xl w-full max-w-md max-h-[88dvh] flex flex-col shadow-[0_8px_0_#17181C] overflow-hidden"
+          >
+            <div className="flex items-center justify-between px-5 pt-4 pb-3 border-b-2 border-[#17181C]/10">
+              <h3 className="font-game text-xl text-[#17181C] tracking-wide">TODAY'S SHORE</h3>
+              <button
+                onClick={() => setShowDailySheet(false)}
+                aria-label="Close today's shore"
+                className="w-8 h-8 rounded-lg bg-[#FDFBF7] hover:bg-[#EAD7B0] border-2 border-[#17181C] font-bold text-sm text-[#17181C] flex items-center justify-center cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-5 py-4">
+              <div className="rounded-2xl border-2 border-[#17181C] bg-[#24698F] text-white px-4 py-3 shadow-[0_3px_0_#10364C] mb-4">
+                <span className="text-[9px] font-black uppercase tracking-widest opacity-75">
+                  {dayKey} · resets in {resetLabel || 'a moment'}
+                </span>
+                <p className="font-game text-lg tracking-wider mt-0.5">{todayTide.name}</p>
+                <p className="text-[11px] font-bold leading-snug opacity-85 mt-0.5">{todayTide.blurb}</p>
+              </div>
+
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[9px] font-black uppercase tracking-widest text-[#17181C]/55">
+                  MISSIONS · {dailySave.done.length}/{todayMissions.length}
+                </span>
+                <span className="text-[9px] font-black uppercase tracking-widest text-[#17181C]/55">
+                  {dailySave.streak > 0 ? `${dailySave.streak} DAY STREAK` : 'PLAY DAILY TO START A STREAK'}
+                </span>
+              </div>
+
+              <div className="flex flex-col gap-2 mb-5">
+                {missionProgress(dailySave, todayMissions).map(({ mission, value, done }) => {
+                  const pct = Math.min(100, Math.round((value / mission.target) * 100));
+                  return (
+                    <div
+                      key={mission.id}
+                      className="rounded-xl border-2 border-[#17181C] bg-white px-3 py-2 shadow-[0_2px_0_#17181C]/20"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[11px] font-bold text-[#17181C] leading-snug">
+                          {mission.label}
+                        </span>
+                        <span
+                          className={`text-[9px] font-black uppercase tracking-widest shrink-0 ${
+                            done ? 'text-[#24698F]' : 'text-[#17181C]/40'
+                          }`}
+                        >
+                          {done ? 'CLEARED' : `${Math.min(value, mission.target)}/${mission.target}`}
+                        </span>
+                      </div>
+                      <div className="h-1.5 mt-1.5 rounded-full bg-[#17181C]/10 overflow-hidden">
+                        <div
+                          className={`h-full rounded-full ${done ? 'bg-[#24698F]' : 'bg-[#E8A317]'}`}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[9px] font-black uppercase tracking-widest text-[#17181C]/55">
+                  SHELLS · {shorePointTotal} SHORE PTS
+                </span>
+                <span className="text-[9px] font-black uppercase tracking-widest text-[#17181C]/40">
+                  EARNED BY BANKING
+                </span>
+              </div>
+
+              <div className="grid grid-cols-4 gap-2">
+                {SHELLS.map(candidate => {
+                  const unlocked = candidate.points <= shorePointTotal;
+                  const isSelected = shell.id === candidate.id;
+                  return (
+                    <button
+                      key={candidate.id}
+                      disabled={!unlocked}
+                      onClick={() => {
+                        saveShellId(candidate.id);
+                        setShellId(candidate.id);
+                      }}
+                      aria-pressed={isSelected}
+                      className={`rounded-xl border-2 px-1.5 py-2 flex flex-col items-center gap-1 transition-all ${
+                        isSelected
+                          ? 'border-[#17181C] shadow-[0_2px_0_#17181C] bg-[#F6C445]/35'
+                          : 'border-[#17181C]/25 bg-white'
+                      } ${unlocked ? 'cursor-pointer hover:bg-[#EAD7B0]/50' : 'opacity-55 cursor-not-allowed'}`}
+                    >
+                      <span
+                        className="w-7 h-7 rounded-full border-2 border-[#17181C]/70"
+                        style={{ backgroundColor: unlocked ? candidate.color : '#C9C4BA' }}
+                      />
+                      <span className="text-[8px] font-black uppercase tracking-wider text-[#17181C] leading-none">
+                        {candidate.name}
+                      </span>
+                      <span className="text-[8px] font-bold text-[#17181C]/45 leading-none">
+                        {unlocked ? (isSelected ? 'WORN' : 'WEAR') : `${candidate.points} PTS`}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
         </div>
       )}
 

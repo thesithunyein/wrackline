@@ -98,6 +98,15 @@ It just keeps eating the shore, which makes the closing waves thinner pickings.
 The calm between surges shrinks all season rather than flattening out at wave seven, so wave
 thirteen is genuinely the tightest wave in the run.
 
+### Season, or today's tide
+
+The menu starts either a season — the run above, scored against everyone's best — or **today's
+tide**, which is the same shore with one modifier laid over it and the same wrack in the same
+places for every player that day. The daily board is one board per day, so it compares runs played
+under the same rules. Three missions sit on top, scored on your best run of the day, and a daily
+tide a day keeps your streak alive. Banking, missions and surviving seasons earn shore points,
+which unlock the four shell colours.
+
 ### Three moments the game is built around
 
 - **The King Tide.** From wave three on, a wave can roll in as a King Tide and pay **double** on
@@ -174,6 +183,35 @@ Later waves are tighter in three ways at once: the low tide window multiplies do
 on, the wrack line retreats eight units per surge so there is less to gather, and the King Tide odds
 climb.
 
+### Beyond one run
+
+A run is the game. Around it sit four things that give a reason to start another one — today,
+tomorrow, and for a shell colour that has to be earned.
+
+```mermaid
+flowchart TD
+  Run["Finish a run"] --> Board["Tide boards<br/>season: best run per player<br/>today's tide: one board per day"]
+  Run --> Missions["Daily missions<br/>three a day, scored on your best run"]
+  Run --> Streak["Streak<br/>a daily tide a day keeps it alive"]
+  Run --> Points["Shore points<br/>banked score + missions + seasons"]
+  Points --> Shells["Shell colours<br/>four, unlocked at 0 / 250 / 900 / 2400"]
+  Missions --> Tomorrow["Tomorrow's shore<br/>a new tide, new missions"]
+  Streak --> Tomorrow
+```
+
+- **The daily tide is one shore for everyone.** A modifier is chosen from the Myanmar date
+  (`RICH WRACK`, `THIN SHORE`, `LONG DRAW`, `KING SEASON`, `SHORT FUSE`) and the run's randomness is
+  seeded from the same date, so the wrack lands in the same places for every player who plays it
+  before the day turns at UTC+06:30. The board for that day is filed under a day key the *server*
+  computes, never one the client sends.
+- **Missions are per-run bests, not running totals.** "Bank 2,000 in a single tide" cannot be
+  completed by two runs of 1,200, which is the point: they ask for a better run, not more runs.
+- **A season run still counts toward missions; only a daily tide moves the streak.** The streak is
+  a record of showing up on a day, and a season run does not prove that.
+- **The on-device board always works.** The world board is used only when the endpoint reports
+  durable storage; otherwise the board sheet says "on this device" and shows the run kept here.
+
+
 ### How the code fits together
 
 ```mermaid
@@ -184,8 +222,10 @@ flowchart TD
   Engine -->|"draw"| Canvas["WebGL canvas"]
   App -->|"crunch, thock, rumble"| Audio["audio.ts<br/>a Web Audio graph built at runtime"]
   Audio --> Speakers["Sound"]
-  App -->|"best score, card name"| Store["localStorage<br/>wrackline_best, wrackline_name"]
-  Engine -.->|"groundHeightAt x, z"| App
+  App -->|"best score, name, daily progress"| Store["localStorage"]
+  App -->|"rounded run"| Endpoint["api/leaderboard.ts<br/>Vercel function"]
+  Endpoint -->|"durable only"| Vault["Redis REST<br/>Upstash / Vercel KV"]
+  App -.->|"groundHeightAt x, z"| Engine
 ```
 
 ### Things worth knowing in the code
@@ -215,6 +255,13 @@ flowchart TD
   another app, and a sheet that is dismissed or that never resolves has not saved anything.
 - **Every ending has a cause.** A run ends because hearts ran out or because thirteen waves were
   survived, and the end screen names which one.
+- **The frame budget is spent on pixels, not on bookkeeping.** Every material in the scene is
+  `flatShading`, which derives its normals in the fragment shader, so the per-frame
+  `computeVertexNormals()` calls on the non-indexed water meshes were pure waste and are gone. The
+  renderer caps the device pixel ratio at 1.5 on a narrow frame and 1.75 on a wide one (a phone
+  reporting 3 was drawing nine times the pixels it needed), the shadow atlas is 1024 on a phone and
+  1536 on a desktop instead of 2048 everywhere, and the particle materials are shared rather than
+  created per spray, dust or haul puff.
 
 ## Running it locally
 
@@ -222,23 +269,37 @@ flowchart TD
 npm install --legacy-peer-deps   # npm's resolver trips over an esbuild peer range
 npm run dev                      # http://localhost:3000
 npm run build                    # production bundle in dist/
-npm run lint                     # tsc --noEmit
+npm run typecheck                # tsc --noEmit
+npm test                         # node test runner over the board and retention rules
 ```
 
 `--legacy-peer-deps` is only needed for a clean install; an existing `node_modules` is fine.
 
+Vite serves the game but not `api/`: in `npm run dev` the board request answers 404 and the game
+does exactly what it does on a host without storage — it keeps the score on the device and says so.
+
 ## Deployment
 
-The game is a static bundle, so any static host works. It is currently on Vercel:
+The game is a static bundle plus one serverless function, so any host with functions works. It is
+currently on Vercel:
 
 ```bash
 npm run build                              # check it locally first
-vercel deploy --prod --project wrackline   # Vercel runs the same build and serves dist/
+vercel deploy --prod --project wrackline   # serves dist/ and api/leaderboard.ts
 ```
 
-Nothing at runtime is server-side: no API keys, no environment variables, no database. Clearing
-site data is the only way to reset your best score and the name that signs your share card,
-because both are yours alone.
+The world board needs durable storage, and is only enabled when the function can find it:
+
+```bash
+vercel env add KV_REST_API_URL production     # or UPSTASH_REDIS_REST_URL
+vercel env add KV_REST_API_TOKEN production   # or UPSTASH_REDIS_REST_TOKEN
+```
+
+Without those two the endpoint answers `503` with `storage: 'unavailable'`, and the client keeps
+the on-device board instead of pretending a server is holding the score. The function also reads
+`LEADERBOARD_KV_REST_URL` / `LEADERBOARD_KV_REST_TOKEN`, so a dedicated database can be used
+without colliding with another project's keys. The board's own keys are namespaced under
+`wrackline:leaderboard:*`, and the daily board lives at `daily:<YYYY-MM-DD>` in Myanmar time.
 
 ## How it is built
 
@@ -258,11 +319,18 @@ index.html          shell, fonts, tab icon
 src/main.tsx        entry
 src/App.tsx         game state, HUD, input, the frame loop
 src/game3d.ts       Three.js world: terrain, ocean, breaker, scenery, creature, particles
+src/game/clock.ts   Myanmar day maths, shared with the endpoint
+src/game/retention.ts  daily tide, missions, streak, shore points, shells
+src/game/leaderboardCore.ts  the run rules every layer agrees on
+src/game/leaderboard.ts      the client: local board, online board, submissions
 src/audio.ts        procedural Web Audio
 src/Logo.tsx        the badge mark and wordmark
 src/logoMark.ts     the mark's shapes, shared by the logo and the share card
 src/shareCard.ts    the 1080x1350 score card, drawn on a canvas
 src/index.css       the Tailwind entry, with the build output kept out of its scan
+api/leaderboard.ts  GET/POST /api/leaderboard, season and daily boards
+server/leaderboardStore.ts  file and Redis REST stores, one row per player
+tests/              node:test suites for the board rules and the retention rules
 docs/logo.svg       the mark on its own, for READMEs and press
 public/og.png       social card
 ```
@@ -275,10 +343,15 @@ product, and a change that makes holding less of a decision is probably not the 
 
 ## Security
 
-This is a static client-side game with no server, no accounts and no analytics. There is very
-little to attack, and [SECURITY.md](SECURITY.md) says exactly what is worth reporting and what is
-known and accepted. The score is stored in `localStorage` and can be edited by anyone. There is no
-leaderboard, so that is a feature.
+The game itself is still a client-side one with no accounts and no analytics, and
+[SECURITY.md](SECURITY.md) says exactly what is worth reporting and what is known and accepted.
+The one thing that leaves the browser is a score: when the world board is live, a finished run is
+posted to `/api/leaderboard` with a device id, a run id, the score, the wave reached, the tide and
+the run duration. There is no login, so a score is self-reported; the endpoint caps it at what the
+game can physically pay out in the time it claims to have taken, and rejects anything that is not a
+whole, positive number inside a season. That stops a lazy edit of `localStorage`, not a determined
+cheater: a board of strangers' best runs cannot be cheat-proof without signed runs or replays, and
+this one does not pretend to be.
 
 ## Code of conduct
 

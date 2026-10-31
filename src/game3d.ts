@@ -222,6 +222,18 @@ export class Wrackline3D {
   // hitbox in App.tsx reads this, so a swollen shell really is a wider target.
   blobGrowScale = 1;
 
+  // Shared particle materials. One per look, instead of a new material for every
+  // grain of sand: each was a fresh shader program lookup and a GPU upload for a
+  // 0.4 second cube.
+  sprayWhiteMat!: THREE.MeshBasicMaterial;
+  sprayGoldMat!: THREE.MeshBasicMaterial;
+  haulDustMat!: THREE.MeshBasicMaterial;
+  sandDustMat!: THREE.MeshBasicMaterial;
+  blobShellMat!: THREE.MeshStandardMaterial;
+
+  // Reused so the camera aim does not allocate a vector every frame.
+  private aimPoint = new THREE.Vector3();
+
   // 0 on a wide screen, 1 once the frame is comfortably taller than it is wide.
   // Drives every portrait camera adjustment: field of view, camera height and
   // distance, follow rate, and how far the aim leads the scuttler.
@@ -367,7 +379,7 @@ export class Wrackline3D {
       alpha: false
     });
     this.renderer.setSize(container.clientWidth, container.clientHeight);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    this.renderer.setPixelRatio(this.pixelRatioFor(container.clientWidth));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.05;
@@ -523,6 +535,11 @@ export class Wrackline3D {
     this.polyTetraGeo = new THREE.TetrahedronGeometry(0.16, 0);
     this.polyOctaGeo = new THREE.OctahedronGeometry(0.18, 0);
 
+    this.sprayWhiteMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    this.sprayGoldMat = new THREE.MeshBasicMaterial({ color: 0xf8c63e });
+    this.haulDustMat = new THREE.MeshBasicMaterial({ color: 0x93e3fd });
+    this.sandDustMat = new THREE.MeshBasicMaterial({ color: 0xd6bc88 });
+
     // 6. Directional Sunlight Rig for Faceted Polygon Shading
     const hemiLight = new THREE.HemisphereLight(0x86BBE4, 0xD4B886, 0.75);
     this.scene.add(hemiLight);
@@ -530,8 +547,12 @@ export class Wrackline3D {
     const sunLight = new THREE.DirectionalLight(0xFFF0D0, 1.6);
     sunLight.position.set(-22, 34, 26);
     sunLight.castShadow = true;
-    sunLight.shadow.mapSize.width = 2048;
-    sunLight.shadow.mapSize.height = 2048;
+    // A phone at a narrow width does not need a 2048 shadow atlas: the shadow
+    // covers a beach of flat facets, and the extra resolution was a quarter of
+    // the frame budget for detail nobody can see on a 6-inch screen.
+    const shadowSize = container.clientWidth < 820 ? 1024 : 1536;
+    sunLight.shadow.mapSize.width = shadowSize;
+    sunLight.shadow.mapSize.height = shadowSize;
     sunLight.shadow.camera.near = 0.5;
     sunLight.shadow.camera.far = 120;
     sunLight.shadow.camera.left = -34;
@@ -1054,13 +1075,13 @@ export class Wrackline3D {
 
     // 6.2 Low-Poly Faceted Carapace/Shell
     const shellGeo = new THREE.IcosahedronGeometry(1.22, 1);
-    const shellMat = new THREE.MeshStandardMaterial({
+    this.blobShellMat = new THREE.MeshStandardMaterial({
       color: 0x2278A6, // Low-poly coastal teal
       roughness: 0.28,
       metalness: 0.12,
       flatShading: true
     });
-    this.blobShell = new THREE.Mesh(shellGeo, shellMat);
+    this.blobShell = new THREE.Mesh(shellGeo, this.blobShellMat);
     this.blobShell.castShadow = true;
     this.blobShell.receiveShadow = true;
     this.blobGroup.add(this.blobShell);
@@ -1320,10 +1341,7 @@ export class Wrackline3D {
 
   // 8. Low-Poly Particle Emitters
   addHaulParticle(fromX: number, fromY: number, fromZ: number, toX: number, toY: number) {
-    const mesh = new THREE.Mesh(
-      this.polyOctaGeo,
-      new THREE.MeshBasicMaterial({ color: 0x93E3FD })
-    );
+    const mesh = new THREE.Mesh(this.polyOctaGeo, this.haulDustMat);
     mesh.position.set(fromX, fromY, fromZ);
     this.scene.add(mesh);
     const dx = toX - fromX;
@@ -1341,10 +1359,7 @@ export class Wrackline3D {
   }
 
   addDustParticle(x: number, y: number, z: number) {
-    const mesh = new THREE.Mesh(
-      this.polyCubeGeo,
-      new THREE.MeshBasicMaterial({ color: 0xD6BC88 })
-    );
+    const mesh = new THREE.Mesh(this.polyCubeGeo, this.sandDustMat);
     mesh.position.set(x, y, z);
     this.scene.add(mesh);
     this.dustParticles.push({
@@ -1360,9 +1375,7 @@ export class Wrackline3D {
   addSprayParticle(x: number, y: number, z: number, isGold: boolean) {
     const mesh = new THREE.Mesh(
       this.polyTetraGeo,
-      new THREE.MeshBasicMaterial({
-        color: isGold ? 0xF8C63E : 0xFFFFFF
-      })
+      isGold ? this.sprayGoldMat : this.sprayWhiteMat
     );
     mesh.position.set(x, y, z);
     this.scene.add(mesh);
@@ -1382,6 +1395,11 @@ export class Wrackline3D {
     this.shakeIntensity = intensity;
   }
 
+  /** Recolours the carapace. The shell is the only thing the unlock track touches. */
+  setShellColor(color: string) {
+    if (this.blobShellMat) this.blobShellMat.color.set(color);
+  }
+
   // A tall, narrow viewport has a narrow horizontal field of view, which used to
   // squeeze the sea out of frame on a phone. Widening the vertical FOV as the
   // aspect narrows keeps the waterline and the open water on screen in portrait,
@@ -1399,13 +1417,25 @@ export class Wrackline3D {
     this.camera.updateProjectionMatrix();
   }
 
+  /**
+   * Pixel budget for the canvas.
+   *
+   * The frame is flat-shaded low-poly geometry that reads cleanly at 1.5x; a
+   * phone reporting DPR 3 was rendering 2.25x the pixels of that for no visible
+   * gain, and paying for it in fill rate and in the shadow pass.
+   */
+  pixelRatioFor(width: number): number {
+    const dpr = window.devicePixelRatio || 1;
+    return Math.min(dpr, width < 820 ? 1.5 : 1.75);
+  }
+
   onResize = () => {
     if (this.isDisposed || !this.container) return;
     const w = this.container.clientWidth;
     const h = this.container.clientHeight;
     this.applyFramingForAspect(w / h);
     this.renderer.setSize(w, h);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    this.renderer.setPixelRatio(this.pixelRatioFor(w));
   };
 
   // 9. Frame-by-Frame Update Loop
@@ -1495,7 +1525,9 @@ export class Wrackline3D {
         pos.setY(i, initialY + wave * taper);
       }
       pos.needsUpdate = true;
-      this.seaGeoNonIndexed.computeVertexNormals();
+      // No computeVertexNormals here. The sea material is flat shaded, so three
+      // derives the normal from screen-space derivatives and never reads the
+      // vertex normals: rebuilding 6,936 of them every frame bought nothing.
     }
 
     // 9.1a The draw. Before a surge the sea pulls back and drops off the beach.
@@ -1549,8 +1581,9 @@ export class Wrackline3D {
         const lz = initial[i * 3 + 2];
         pos.setY(i, waterSurfaceY(wGroupX + lx, lz, waveDrawdown) - wGroupY + shape(lx, lz));
       }
+      // Flat shading takes the normal from the fragment derivatives, so the
+      // per-frame normal rebuild was pure cost on all three water surfaces.
       pos.needsUpdate = true;
-      geo.computeVertexNormals();
     };
 
     drape(this.waveSwellGeo, this.swellInitialPositions, (lx, lz) => {
@@ -1726,7 +1759,7 @@ export class Wrackline3D {
       this.playerSpeed,
       frameHalfWidth(this.camera.position.z, this.camera.fov, this.camera.aspect)
     );
-    const lookTarget = new THREE.Vector3(
+    const lookTarget = this.aimPoint.set(
       landscapeLookX * (1 - p) + portraitLookX * p,
       this.baseCameraTarget.y,
       this.baseCameraTarget.z
