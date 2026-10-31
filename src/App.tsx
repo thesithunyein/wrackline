@@ -130,6 +130,9 @@ const DIG_IN_TIME = 0.3;
 const SHARE_NAME_KEY = 'wrackline_name';
 // Sound is a setting now, so it survives a reload like the language does.
 const MUTED_KEY = 'wrackline_muted';
+// Where a shared run sends people. One constant, so the share text cannot drift from
+// the canonical host in index.html.
+const SITE_URL = 'https://wrackline.sithunyein.com';
 
 const NEAR_MISS_WINDOW = 0.45;
 const NEAR_MISS_BONUS = 1.5;
@@ -255,6 +258,23 @@ const IconExpand: React.FC = () => (
     <path d="M20 15v5h-5" />
     <path d="M15 4h5v5" />
     <path d="M9 20H4v-5" />
+  </svg>
+);
+
+const IconExternal: React.FC = () => (
+  <svg
+    viewBox="0 0 24 24"
+    className="w-5 h-5"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={2.1}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M14 4h6v6" />
+    <path d="M20 4l-8 8" />
+    <path d="M18.5 14.5V19a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6.5a1 1 0 0 1 1-1h4.5" />
   </svg>
 );
 
@@ -1704,7 +1724,7 @@ export default function App() {
             wave: wavesSurvived + 1,
             score: bankedScore
           });
-    const url = 'https://wrackline.vercel.app';
+    const url = SITE_URL;
     const text = tr('{headline} · {tide} tide', {
       headline,
       tide: tr(selectedDiff.name)
@@ -2974,6 +2994,32 @@ export default function App() {
                   {isFullscreen ? t('EXIT FULLSCREEN') : t('ENTER FULLSCREEN')}
                 </button>
               </div>
+
+              {/* Source. A jam judge or a curious player should be able to reach the
+                  repository in one tap without leaving the game first. */}
+              <a
+                href="https://github.com/thesithunyein/wrackline"
+                target="_blank"
+                rel="noreferrer"
+                className="rounded-2xl border-2 border-[#17181C] bg-white px-3.5 py-3 shadow-[0_2px_0_#17181C]/15 hover:bg-[#EAD7B0]/40 transition-colors"
+              >
+                <div className="flex items-center gap-3">
+                  <span className="w-9 h-9 shrink-0 rounded-lg bg-[#EAD7B0]/60 border-2 border-[#17181C]/15 text-[#17181C] flex items-center justify-center">
+                    <IconExternal />
+                  </span>
+                  <span className="flex-1 min-w-0">
+                    <span className="font-game text-sm text-[#17181C] tracking-wider block">
+                      {t('SOURCE CODE')}
+                    </span>
+                    <span className="text-[10px] leading-snug font-bold text-[#17181C]/55 block">
+                      {t('The whole game, on GitHub.')}
+                    </span>
+                  </span>
+                  <span className="text-[10px] font-black uppercase tracking-widest text-[#17181C]/40">
+                    {t('OPEN')}
+                  </span>
+                </div>
+              </a>
 
               <p className="text-center text-[9px] font-black uppercase tracking-widest text-[#17181C]/35 leading-relaxed pt-0.5">
                 {t('Sound and language are saved on this device.')}

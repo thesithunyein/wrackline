@@ -5,7 +5,7 @@
   A seaside arcade game about greed, timing, and thirteen waves of incoming water.</p>
 
   <p>
-    <a href="https://wrackline.vercel.app"><img alt="Play WRACKLINE" src="https://img.shields.io/badge/PLAY-wrackline.vercel.app-1A85B6?style=for-the-badge&labelColor=17181C"></a>
+    <a href="https://wrackline.sithunyein.com"><img alt="Play WRACKLINE" src="https://img.shields.io/badge/PLAY-wrackline.sithunyein.com-1A85B6?style=for-the-badge&labelColor=17181C"></a>
     <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/LICENSE-MIT-E7D3A4?style=for-the-badge&labelColor=17181C"></a>
     <a href="https://github.com/thesithunyein/wrackline/commits/main"><img alt="Last commit" src="https://img.shields.io/github/last-commit/thesithunyein/wrackline?style=for-the-badge&labelColor=17181C&color=1A85B6"></a>
     <a href="https://github.com/thesithunyein/wrackline/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/thesithunyein/wrackline?style=for-the-badge&labelColor=17181C&color=F6C445"></a>
@@ -37,14 +37,14 @@
 | 3 | **Main contact** | Team leader **Sithu Nyein** — [sithunyein.mailto@gmail.com](mailto:sithunyein.mailto@gmail.com) · Telegram [@thesithunyein](https://t.me/thesithunyein) |
 | 4 | **Short description** | A seaside arcade game about greed and timing. You are a hermit crab working a storm beach: hold your nerve through the low tide, pull the wrack into your shell, and get off the sand before the breaker lands on you. Thirteen waves, four shell colours, a daily shore. |
 | 16 | **Repository access** | Public: https://github.com/thesithunyein/wrackline. Submission tag **`v1.0.0`** (`git rev-parse v1.0.0` for the exact commit). |
-| 17 | **Build version** | **1.0.0** — tag `v1.0.0`, deployed to production at https://wrackline.vercel.app on 2026-10-31. |
+| 17 | **Build version** | **1.0.0** — tag `v1.0.0`, deployed to production at https://wrackline.sithunyein.com on 2026-10-31. |
 
 ### 5. How to open and play
 
-Open **https://wrackline.vercel.app** in a browser. There is nothing to install, no account and no
+Open **https://wrackline.sithunyein.com** in a browser. There is nothing to install, no account and no
 login: the title screen loads straight into the game. Press **PLAY**, scuttle with `A`/`D`, and hold
 `Space` to haul. The first run takes about two minutes; `R` or `Enter` on the end screen starts the
-next one.
+next one. The same build is also served from https://wrackline.vercel.app.
 
 ### 6. Supported browsers
 
@@ -234,7 +234,7 @@ Team **Solo Canvas** confirms:
    missions, a daily shore), the tuning, the geometry, the UI and the audio were written from
    scratch for this entry. No code, art, level or data was taken from another game.
 3. **Not commercially available and not on any public market.** The game has never been sold,
-   licensed or listed on a store or marketplace. https://wrackline.vercel.app is a free public
+   licensed or listed on a store or marketplace. https://wrackline.sithunyein.com is a free public
    build with no ads, purchases, subscriptions or accounts, hosted so judges and players can open
    it; there is no commercial release.
 4. **Right to use all assets.** Every asset is original work, MIT, Apache-2.0 or SIL OFL 1.1, as
@@ -265,7 +265,7 @@ sand before the breaker lands on top of you.
 Every wave gives you the same choice, and it is the whole game. The longer you hold, the more you
 stand to bank, and the more the surge can tear off your back.
 
-**Play it:** https://wrackline.vercel.app (a keyboard, a mouse or a thumb all work)
+**Play it:** https://wrackline.sithunyein.com (a keyboard, a mouse or a thumb all work)
 
 ## Contents
 
