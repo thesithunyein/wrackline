@@ -196,7 +196,7 @@ npm run build && npm run preview # production bundle
 
 | Requirement | Needed for | If it is missing |
 |---|---|---|
-| The Vercel deployment itself | loading the game | nothing to play |
+| **https://wrackline.sithunyein.com** (a Vercel deployment) | loading the game | nothing to play |
 | **Google Fonts** (Righteous, Space Grotesk, Noto Sans Myanmar) | the typography | system font stack; the game still plays |
 | **jsDelivr** (Aka08 TTF) | Burmese interface only, ~118 KB | Burmese falls back to Noto Sans Myanmar |
 | **`/api/leaderboard`** on Vercel | world boards and score submission | the on-device board, labelled as such |
@@ -545,7 +545,9 @@ does exactly what it does on a host without storage — it keeps the score on th
 ## Deployment
 
 The game is a static bundle plus one serverless function, so any host with functions works. It is
-currently on Vercel:
+currently on Vercel and answers on **https://wrackline.sithunyein.com**; `wrackline.vercel.app`
+remains attached to the same project as an alias, so both addresses serve the same build and the
+same board.
 
 ```bash
 npm run build                              # check it locally first
