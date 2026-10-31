@@ -52,6 +52,7 @@ import {
 } from './game/leaderboard';
 import type { BoardEntry, BoardId } from './game/leaderboardCore';
 import { planWaveLoot } from './game/loot';
+import { rollHush } from './game/waveClock';
 import {
   LANGUAGES,
   loadLang,
@@ -484,6 +485,10 @@ export default function App() {
     runMode: 'SEASON' as 'SEASON' | 'DAILY',
     mods: SEASON_MOD,
     rng: Math.random as () => number,
+    // The wave clock rolls on its own stream. Drawing it from the shore's stream would
+    // shift every loot placement on a daily tide the moment this shipped, and today's
+    // board would stop comparing like with like.
+    waveRng: Math.random as () => number,
     surgeGrabs: 0,
     kingBanks: 0,
     itemsHauled: 0,
@@ -779,9 +784,16 @@ export default function App() {
 
     // The window closes all season. The old 0.65 floor was reached at wave seven, so
     // every wave after it played identically; the floor now sits out past the last
-    // wave and the closing waves are genuinely thin.
+    // wave and the closing waves are genuinely thin. What the season earns here is the
+    // *centre* of the window, though, not its length on any one wave: the hush is rolled
+    // around it, so the shore can open for a sneak one wave and a long breath the next.
     const waveFactor = Math.max(0.42, 1 - s.waveIndex * 0.045);
-    s.phaseDuration = s.currentDiff.baseLowTide * waveFactor * s.mods.lowTide;
+    const baseLowTide = s.currentDiff.baseLowTide * waveFactor * s.mods.lowTide;
+    s.phaseDuration = rollHush({
+      base: baseLowTide,
+      waveIndex: s.waveIndex,
+      rng: s.waveRng
+    }).seconds;
 
     // King Tide is rolled, not scheduled. Odds climb as the run goes on so late
     // waves feel the most dangerous, it never lands twice in a row, and a pity
@@ -978,6 +990,10 @@ export default function App() {
     // a fair comparison rather than a draw from the same dice.
     s.mods = mode === 'DAILY' ? tide : SEASON_MOD;
     s.rng = mode === 'DAILY' ? mulberry32(dailySeed(today)) : Math.random;
+    // Same day, same clock: the daily tide hands every player the same beats as well as
+    // the same shore, so its board still measures the player and not the dice.
+    s.waveRng =
+      mode === 'DAILY' ? mulberry32(dailySeed(today) ^ 0x5bf03635) : Math.random;
     s.surgeGrabs = 0;
     s.kingBanks = 0;
     s.itemsHauled = 0;

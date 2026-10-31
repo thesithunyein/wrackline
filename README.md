@@ -36,8 +36,8 @@
 | 2 | **Team name** | **Solo Canvas** — a one-person team |
 | 3 | **Main contact** | Team leader **Sithu Nyein** — [sithunyein.mailto@gmail.com](mailto:sithunyein.mailto@gmail.com) · Telegram [@thesithunyein](https://t.me/thesithunyein) |
 | 4 | **Short description** | A seaside arcade game about greed and timing. You are a hermit crab working a storm beach: hold your nerve through the low tide, pull the wrack into your shell, and get off the sand before the breaker lands on you. Thirteen waves, four shell colours, a daily shore. |
-| 16 | **Repository access** | Public: https://github.com/thesithunyein/wrackline. Submission tag **`v1.0.0`** (`git rev-parse v1.0.0` for the exact commit). |
-| 17 | **Build version** | **1.0.0** — tag `v1.0.0`, deployed to production at https://wrackline.sithunyein.com on 2026-10-31. |
+| 16 | **Repository access** | Public: https://github.com/thesithunyein/wrackline. Submission tag **`v1.1.0`** (`git rev-parse v1.1.0` for the exact commit). |
+| 17 | **Build version** | **1.1.0** — tag `v1.1.0`, deployed to production at https://wrackline.sithunyein.com on 2026-10-31. |
 
 ### 5. How to open and play
 
@@ -123,7 +123,7 @@ colours at 0 / 250 / 900 / 2400.
 | **Vite 8** + `@vitejs/plugin-react` | MIT | dev server and production build |
 | **Tailwind CSS v4** + `@tailwindcss/vite` | MIT | HUD and menu styling |
 | **TypeScript 7** (`tsc --noEmit`) | Apache-2.0 | type checking; no emit |
-| **tsx** + **Node's `node:test`** | MIT / Node licence | the 36-test suite |
+| **tsx** + **Node's `node:test`** | MIT / Node licence | the 44-test suite |
 | **esbuild** | MIT | transitive build dependency |
 | **Vercel** (host + serverless function + KV/Upstash Redis REST) | hosted service, not shipped code | hosting, `/api/leaderboard`, durable board storage |
 
@@ -168,7 +168,7 @@ information about any person.
 ```bash
 npm install --legacy-peer-deps   # npm's resolver trips over an esbuild peer range
 npm run typecheck                # tsc --noEmit
-npm test                         # 36 tests over leaderboard, retention, loot and i18n rules
+npm test                         # 44 tests over leaderboard, retention, loot, i18n and the wave clock
 npm run dev                      # http://localhost:3000
 npm run build && npm run preview # production bundle
 ```
@@ -251,7 +251,7 @@ Team **Solo Canvas** confirms:
    review behind them.
 8. **The repository and its history are accurate.** One author (two spellings of the same name and
    email), a linear history with no imported, squashed or generated commits, and no secrets
-   committed. The deployed production build is tag `v1.0.0`.
+   committed. The deployed production build is tag `v1.1.0`.
 
 Signed for the team: **Sithu Nyein**, Solo Canvas — 2026-10-31.
 
@@ -307,7 +307,7 @@ what that risk buys, not free money.
 
 ### Tides
 
-| Tide | Multiplier | Low tide | Warning | Hearts | Character |
+| Tide | Multiplier | Low tide (wave 1) | Warning | Hearts | Character |
 |---|---|---|---|---|---|
 | CALM | 1.0× | 7.0s | 1.8s | 4 | Long low tide, slow breaker, forgiving window |
 | SURF | 1.7× | 5.0s | 1.3s | 3 | The default. A fair fight between greed and escape |
@@ -329,6 +329,28 @@ It just keeps eating the shore, which makes the closing waves thinner pickings.
 
 The calm between surges shrinks all season rather than flattening out at wave seven, so wave
 thirteen is genuinely the tightest wave in the run.
+
+### The wave clock is a roll, not a metronome
+
+The figure in the table above is the **centre** of a wave's low tide, not its length. Every wave
+rolls its own window around that centre, so the next surge can never be counted down from the last
+one:
+
+| Roll | Share | Low tide | What it is for |
+|---|---|---|---|
+| **sneak** | 30% | 0.42× the centre | The shore is open for about one crossing. On SURF that is a **2.1s** window in the opening waves, and about **3.3s** counted from the start of the calm to the surge — the pressure the closing wave of the season used to hold, arriving on wave two |
+| **ordinary** | 58% | 0.78× to 1.18× the centre | The window the season has earned, so the ladder still reads |
+| **breath** | 12% | 1.45× the centre | A long one, so a run of short hushes is not the whole story and greed has somewhere to pay |
+
+Measured over 2,000 simulated SURF seasons, the calm from the water pulling back to the surge
+coming in runs from **2.4s** to **8.2s** with a median of **4.5s**, against a fixed 6.3s down to
+3.6s before. A season holds about four sneaks and one or two breaths.
+
+Two rules keep it fair. The **warning is untouched**: the sea draws back for the full 0.9 to 1.8
+seconds on every wave at every tide, so an unexpected surge is still announced, and the reaction
+window is the one the tide table promises. And the **opening wave is never a sneak**, because the
+first low tide is where the controls are learned. Today's tide rolls the clock on its own seeded
+stream, so every player gets the same beats as well as the same wrack.
 
 ### Season, or today's tide
 
@@ -443,9 +465,9 @@ flowchart LR
   W13 --> Win["You outlasted the tide"]
 ```
 
-Later waves are tighter in three ways at once: the low tide window multiplies down as the run goes
-on, the wrack line retreats eight units per surge so there is less to gather, and the King Tide odds
-climb.
+Later waves are tighter in three ways at once: the centre of the low tide window multiplies down as
+the run goes on, the wrack line retreats eight units per surge so there is less to gather, and the
+King Tide odds climb.
 
 ### Beyond one run
 
