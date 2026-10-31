@@ -36,8 +36,8 @@
 | 2 | **Team name** | **Solo Canvas** — a one-person team |
 | 3 | **Main contact** | Team leader **Sithu Nyein** — [sithunyein.mailto@gmail.com](mailto:sithunyein.mailto@gmail.com) · Telegram [@thesithunyein](https://t.me/thesithunyein) |
 | 4 | **Short description** | A seaside arcade game about greed and timing. You are a hermit crab working a storm beach: hold your nerve through the low tide, pull the wrack into your shell, and get off the sand before the breaker lands on you. Thirteen waves, four shell colours, a daily shore. |
-| 16 | **Repository access** | Public: https://github.com/thesithunyein/wrackline. Submission tag **`v1.1.2`** (`git rev-parse v1.1.2` for the exact commit). |
-| 17 | **Build version** | **1.1.2** — tag `v1.1.2`, deployed to production at https://wrackline.sithunyein.com on 2026-10-31. |
+| 16 | **Repository access** | Public: https://github.com/thesithunyein/wrackline. Submission tag **`v1.1.3`** (`git rev-parse v1.1.3` for the exact commit). |
+| 17 | **Build version** | **1.1.3** — tag `v1.1.3`, deployed to production at https://wrackline.sithunyein.com on 2026-10-31. |
 
 ### 5. How to open and play
 
@@ -215,10 +215,16 @@ the share card — is generated locally, and the score is posted once at the end
 
 | Tool | Purpose | Affected code or assets | Human review and modification |
 |---|---|---|---|
+| **Google AI Studio** (Gemini) | early UI/UX direction: the first drafts of the title screen, HUD and menu layout and colour, before any of it was built | early interface and layout drafts only — nothing generated there was committed as a file; the shipped interface is the developer's rework of those drafts in `src/App.tsx`, `src/index.css` and the components | each screen was rebuilt and adjusted by hand against the real game (header order, settings sheet, shell portraits, Burmese layout); the drafts were a starting point, not the delivered UI |
 | **Qoder** (agentic coding IDE, Claude-family model) | implementation assistance: scene code, game state, UI, i18n, settings sheet, tests, build config, this README | most of `src/`, plus `api/leaderboard.ts`, `server/leaderboardStore.ts`, `tests/`, `index.html`, `vite.config.ts`, `README.md` | every change read and approved line by line before commit; `tsc --noEmit` and the 44 `node:test` cases run on each change; the production build played in Chrome at 1280x800 and 390x844 before it shipped; the model's mistakes were caught and fixed (the settings icon was first drawn as a sun, the Burmese face first hijacked the Latin wordmark), and every tuning constant is the developer's, set from measured playtests |
 | **Qoder** | throwaway verification scripts | `pt/` — puppeteer-core, font-inspection and screenshot scripts kept outside the repository | used only to measure this build; not part of the submission |
 | **An AI audio generator** (provider and version not recorded at generation time) | the sea bed and the breaker, `public/audio/wavebg.mp3` and `public/audio/wave.mp3` | the ambient wash under play and the swell and crash of the wave, generated rather than recorded | both files were auditioned in the built game against the rest of the mix; the sea bed is crossfaded into a seamless loop at load and hushed under each breaker, and the breaker is trimmed by playback envelope in `src/audio.ts` and layered over a synthesised sub-bass thump; they are the only AI-generated assets in the submission |
 
+- **Early UI/UX came from Google AI Studio, and only early.** The first layout and visual direction
+  for the title screen, HUD and menus was drafted there; the shipped interface is the developer's
+  rework of those drafts, screen by screen, and no generated mock-up or export was committed. The
+  final UI is described in §8 and the settings/guide sections, and every text string is in
+  `src/game/i18n.ts`.
 - **Two AI-generated audio assets.** The sea bed (`public/audio/wavebg.mp3`) and the breaker swell
   (`public/audio/wave.mp3`, §11) were generated with an AI audio tool rather than recorded or
   sampled. The sea bed plays under the whole game, is crossfaded into itself at load so the loop
@@ -269,7 +275,7 @@ Team **Solo Canvas** confirms:
    review behind them.
 8. **The repository and its history are accurate.** One author (two spellings of the same name and
    email), a linear history with no imported, squashed or generated commits, and no secrets
-   committed. The deployed production build is tag `v1.1.2`.
+   committed. The deployed production build is tag `v1.1.3`.
 
 Signed for the team: **Sithu Nyein**, Solo Canvas — 2026-10-31.
 
@@ -700,3 +706,7 @@ textures or existing recordings are used.
 
 **Libraries:** React, Three.js, Vite and Tailwind CSS, all MIT licensed. The leaderboard function
 runs on Vercel with Upstash/Vercel KV (Redis REST).
+
+**AI tools:** Google AI Studio drafted the early interface and layout direction, which the developer
+then reworked into the shipped UI; Qoder assisted with implementation, tests and verification; the
+two water samples were generated with an AI audio tool. Full disclosure in §15.
