@@ -1,5 +1,6 @@
-// Procedural Web Audio Synthesizer for WRACKLINE - Professional AAA Game Sound Design
-// 100% Procedurally Synthesized - Zero External Audio Files - Zero Network Requests
+// Game audio for WRACKLINE. Everything but the breaker is synthesised in the Web Audio
+// graph; the breaker itself is one generated swell (public/audio/wave.mp3, declared in the
+// README), fetched once at the first input and decoded into memory.
 
 let audioCtx: AudioContext | null = null;
 let rumbleOsc: OscillatorNode | null = null;
@@ -10,6 +11,17 @@ let rumbleFilter: BiquadFilterNode | null = null;
 let ambientNoise: AudioBufferSourceNode | null = null;
 let ambientGain: GainNode | null = null;
 let ambientFilter: BiquadFilterNode | null = null;
+
+// The generated breaker, and the voice it is currently playing through.
+let waveSample: AudioBuffer | null = null;
+let waveLoading = false;
+let waveSource: AudioBufferSourceNode | null = null;
+let waveGain: GainNode | null = null;
+
+const WAVE_URL = '/audio/wave.mp3';
+// The sample peaks at -7.8 dBFS and sits around -30 dB mean, so it needs a lift to hold
+// its own against the synthesised effects around it without touching the ceiling.
+const WAVE_GAIN = 1.4;
 
 let isMuted = false;
 let audioStarted = false;
@@ -29,10 +41,29 @@ export function initAudio() {
       }
       audioStarted = true;
       startAmbientOcean();
+      loadWaveSample();
     }
   } catch {
     // Audio restricted or not supported
   }
+}
+
+// Fetched and decoded behind the first input, so the first breaker already has it. If it
+// never arrives - a cold load, a host that does not serve it - playWave falls back to the
+// synthesised crash and the wave is simply the sound it used to be.
+function loadWaveSample() {
+  if (!audioCtx || waveSample || waveLoading) return;
+  const ctx = audioCtx;
+  waveLoading = true;
+  fetch(WAVE_URL)
+    .then(res => (res.ok ? res.arrayBuffer() : Promise.reject(new Error(String(res.status)))))
+    .then(buffer => ctx.decodeAudioData(buffer))
+    .then(decoded => {
+      waveSample = decoded;
+    })
+    .catch(() => {
+      waveLoading = false;
+    });
 }
 
 export function toggleMute(): boolean {
@@ -40,6 +71,8 @@ export function toggleMute(): boolean {
   if (ambientGain && audioCtx) {
     ambientGain.gain.setValueAtTime(isMuted ? 0 : 0.04, audioCtx.currentTime);
   }
+  // The breaker runs for four seconds, so muting has to reach a sample already in flight.
+  if (isMuted) stopWave(0.08);
   return isMuted;
 }
 
@@ -224,7 +257,8 @@ export function stopRumble() {
   } catch {}
 }
 
-// Crash when wave lands on the beach
+// Crash when wave lands on the beach. The synthesised fallback: used when the recording
+// has not arrived yet, and for the hit that takes a heart.
 export function playCrash() {
   if (!audioCtx || audioCtx.state !== 'running' || isMuted) return;
   try {
@@ -251,14 +285,83 @@ export function playCrash() {
     filter.connect(gain);
     gain.connect(audioCtx.destination);
     noise.start(t);
+  } catch {}
+  playImpactThump();
+}
 
-    // Deep sub bass impact
+// The breaker landing on the shore. The recorded swell replaces the noise burst above,
+// which read as flat hiss on laptop speakers; the thump stays under it, because the
+// recording has no transient and the shore still has to feel hit. The swell opens quiet,
+// builds for about a second, and washes on through the sweep and the retreat.
+export function playWave() {
+  if (!audioCtx || audioCtx.state !== 'running' || isMuted) return;
+  if (!waveSample) {
+    playCrash();
+    return;
+  }
+  try {
+    stopWave(0.02);
+    const ctx = audioCtx;
+    const t = ctx.currentTime;
+    const source = ctx.createBufferSource();
+    source.buffer = waveSample;
+    const gain = ctx.createGain();
+    // Faded in and out over the sample's own length, so the tail never ends on a click.
+    const out = Math.max(0.15, waveSample.duration - 0.5);
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(WAVE_GAIN, t + 0.09);
+    gain.gain.setValueAtTime(WAVE_GAIN, t + out);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + out + 0.45);
+    source.connect(gain);
+    gain.connect(ctx.destination);
+    source.onended = () => {
+      if (waveSource === source) {
+        waveSource = null;
+        waveGain = null;
+      }
+    };
+    source.start(t);
+    waveSource = source;
+    waveGain = gain;
+  } catch {
+    playCrash();
+    return;
+  }
+  playImpactThump();
+}
+
+function stopWave(fadeSeconds: number) {
+  if (!audioCtx || !waveSource) return;
+  const ctx = audioCtx;
+  const t = ctx.currentTime;
+  const source = waveSource;
+  const gain = waveGain;
+  waveSource = null;
+  waveGain = null;
+  try {
+    if (!gain) {
+      source.stop();
+      return;
+    }
+    gain.gain.cancelScheduledValues(t);
+    gain.gain.setValueAtTime(Math.max(0.0001, gain.gain.value), t);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + fadeSeconds);
+    source.stop(t + fadeSeconds + 0.02);
+  } catch {}
+}
+
+// The physical part of the hit: a sub-bass drop a phone speaker cannot make but a lap can
+// feel. Shared by the recorded wave and the synthesised fallback.
+function playImpactThump() {
+  if (!audioCtx || audioCtx.state !== 'running' || isMuted) return;
+  try {
+    const t = audioCtx.currentTime;
     const sub = audioCtx.createOscillator();
     const subGain = audioCtx.createGain();
     sub.type = 'sine';
     sub.frequency.setValueAtTime(85, t);
     sub.frequency.exponentialRampToValueAtTime(26, t + 0.4);
-    subGain.gain.setValueAtTime(0.55, t);
+    subGain.gain.setValueAtTime(0.5, t);
     subGain.gain.exponentialRampToValueAtTime(0.001, t + 0.44);
     sub.connect(subGain);
     subGain.connect(audioCtx.destination);

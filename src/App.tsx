@@ -7,6 +7,7 @@ import {
   startRumble,
   stopRumble,
   playCrash,
+  playWave,
   playSparkle,
   playTremolo,
   playDeath,
@@ -856,7 +857,7 @@ export default function App() {
     s.heartLostThisWave = false;
     setIsWaveWarning(false);
     stopRumble();
-    playCrash();
+    playWave();
 
     if (engine3dRef.current) {
       engine3dRef.current.triggerImpactShake(0.55);
