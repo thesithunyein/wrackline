@@ -26,15 +26,15 @@
   </p>
 </div>
 
-![WRACKLINE title screen](public/og.png)
+![WRACKLINE title screen: the low-poly shore at low tide, the WRACKLINE wordmark, a PLAY button, the tide-intensity selector (CALM 1.0X / SURF 1.7X / STORM 2.8X) and today's tide card, with trophy, guide and settings buttons top-right](public/og.png)
 
 ## Submission
 
 | # | Item | Answer |
 |---|---|---|
 | 1 | **Game title** | **WRACKLINE** — *Survive the tide. Harvest the shore.* |
-| 2 | **Team name** | Sithu Nyein (solo developer) |
-| 3 | **Main contact** | Sithu Nyein — [sithunyein.mailto@gmail.com](mailto:sithunyein.mailto@gmail.com) |
+| 2 | **Team name** | **Solo Canvas** — a one-person team |
+| 3 | **Main contact** | Team leader **Sithu Nyein** — [sithunyein.mailto@gmail.com](mailto:sithunyein.mailto@gmail.com) · Telegram [@thesithunyein](https://t.me/thesithunyein) |
 | 4 | **Short description** | A seaside arcade game about greed and timing. You are a hermit crab working a storm beach: hold your nerve through the low tide, pull the wrack into your shell, and get off the sand before the breaker lands on you. Thirteen waves, four shell colours, a daily shore. |
 | 16 | **Repository access** | Public: https://github.com/thesithunyein/wrackline. Submission tag **`v1.0.0`** (`git rev-parse v1.0.0` for the exact commit). |
 | 17 | **Build version** | **1.0.0** — tag `v1.0.0`, deployed to production at https://wrackline.vercel.app on 2026-10-31. |
@@ -574,7 +574,8 @@ This project follows the [Contributor Covenant](CODE_OF_CONDUCT.md), version 2.1
 
 ## Credits
 
-Built by **Sithu Nyein** ([sithunyein.mailto@gmail.com](mailto:sithunyein.mailto@gmail.com)).
+Built by **Solo Canvas** — Sithu Nyein ([sithunyein.mailto@gmail.com](mailto:sithunyein.mailto@gmail.com),
+Telegram [@thesithunyein](https://t.me/thesithunyein)).
 
 **Art and audio:** entirely original and entirely procedural. The terrain, ocean, breaker, props,
 creature, shell portraits, logo, UI icons and share card are drawn in code with Three.js and Canvas;
