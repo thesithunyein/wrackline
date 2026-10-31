@@ -107,8 +107,13 @@ under the same rules. Three missions sit on top, scored on your best run of the 
 tide a day keeps your streak alive. Banking, missions and surviving seasons earn shore points,
 which unlock the four shell colours.
 
-### Three moments the game is built around
+### Four moments the game is built around
 
+- **The draw.** The low tide never shows you everything: roughly two in five pieces of a wave are
+  still out on the water, and they wash in while the sea is already drawing back, one to three
+  drops at a time. Every one of them lands at the waterline, where the surge arrives first and where
+  a piece is worth the most. Without them the beach could be cleared and banked before the warning
+  was even called, which made the whole greed decision optional.
 - **The King Tide.** From wave three on, a wave can roll in as a King Tide and pay **double** on
   everything you bank during it. The odds climb as the run goes on, it never lands twice in a row,
   and three dry waves guarantee the next one rolls. It is the reason a cautious run still has a
@@ -323,6 +328,7 @@ src/game/clock.ts   Myanmar day maths, shared with the endpoint
 src/game/retention.ts  daily tide, missions, streak, shore points, shells
 src/game/leaderboardCore.ts  the run rules every layer agrees on
 src/game/leaderboard.ts      the client: local board, online board, submissions
+src/game/loot.ts    how a wave's wrack splits between the sand and the draw
 src/audio.ts        procedural Web Audio
 src/Logo.tsx        the badge mark and wordmark
 src/logoMark.ts     the mark's shapes, shared by the logo and the share card
@@ -330,7 +336,7 @@ src/shareCard.ts    the 1080x1350 score card, drawn on a canvas
 src/index.css       the Tailwind entry, with the build output kept out of its scan
 api/leaderboard.ts  GET/POST /api/leaderboard, season and daily boards
 server/leaderboardStore.ts  file and Redis REST stores, one row per player
-tests/              node:test suites for the board rules and the retention rules
+tests/              node:test suites for the board, retention and loot rules
 docs/logo.svg       the mark on its own, for READMEs and press
 public/og.png       social card
 ```

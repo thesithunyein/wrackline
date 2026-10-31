@@ -51,6 +51,7 @@ import {
   syncPlayerName
 } from './game/leaderboard';
 import type { BoardEntry, BoardId } from './game/leaderboardCore';
+import { planWaveLoot } from './game/loot';
 
 interface DiffConfig {
   name: string;
@@ -190,6 +191,15 @@ interface FloatingPopup {
   isGold: boolean;
   // Grabs tick past in a stream, so they are quiet and small. Banks are the loud ones.
   size: 'small' | 'big';
+}
+
+// Wrack still out on the water when the tide drops. It washes in at `at`, a fraction
+// of the warning, so it lands inside the escape window rather than before it.
+interface PendingLoot {
+  type: number;
+  x: number;
+  z: number;
+  at: number;
 }
 
 // Line-art icons, drawn rather than typed. The emoji speaker arrived as a different
@@ -427,6 +437,8 @@ export default function App() {
     playerSquashY: 1,
 
     loot3D: [] as Loot3DItem[],
+    pendingLoot: [] as PendingLoot[],
+    washedIn: 0,
     attached3D: [] as Loot3DItem[],
     screenShake: 0
   });
@@ -542,6 +554,60 @@ export default function App() {
     }
   }, []);
 
+  // Puts one piece of wrack on the sand. Shared by the pieces the low tide has already
+  // stranded and the ones that wash in with the draw, so both pay the same way.
+  const placeLoot = useCallback((typeIndex: number, spawnX: number, spawnZ: number): Loot3DItem | null => {
+    const s = stateRef.current;
+    if (!engine3dRef.current) return null;
+
+    const groundY = groundHeightAt(spawnX, spawnZ) + 0.3;
+
+    // The sparkle marker rides the pieces that carry the most risk, so it is read
+    // off the piece's place on the shore rather than its index in the loop.
+    const shoreFrac = (spawnX - WRACK_NEAR_X) / (WRACK_FAR_X - WRACK_NEAR_X);
+    const band: 'near' | 'mid' | 'far' =
+      shoreFrac < 0.34 ? 'near' : shoreFrac < 0.67 ? 'mid' : 'far';
+    const mesh = engine3dRef.current.createLootMesh(typeIndex, band);
+
+    mesh.position.set(spawnX, groundY, spawnZ);
+    engine3dRef.current.scene.add(mesh);
+
+    let baseVal = 100;
+    if (typeIndex === 0) baseVal = 320;
+    else if (typeIndex === 1) baseVal = 140;
+    else if (typeIndex === 2) baseVal = 120;
+    else if (typeIndex === 3) baseVal = 80;
+    else if (typeIndex === 4) baseVal = 250;
+    else if (typeIndex === 6) baseVal = 180;
+
+    // Risk pays. The surge arrives from the seaward end and takes the furthest loot
+    // first, so the further up the shore a piece sits the less time there is to
+    // reach it, and the more it is worth for the trouble. The daily tide's own
+    // multiplier is applied here, once, so nothing downstream has to know about it.
+    const risk = Math.max(0, Math.min(1, shoreFrac));
+    const val = Math.round(
+      baseVal * s.currentDiff.multiplier * (1 + risk * 1.2) * s.mods.lootValue
+    );
+
+    const item: Loot3DItem = {
+      id: Date.now() + s.loot3D.length + s.rng(),
+      mesh,
+      type: typeIndex,
+      band,
+      baseVal,
+      val,
+      x: spawnX,
+      y: groundY,
+      z: spawnZ,
+      origX: spawnX,
+      isAttached: false,
+      attachAngle: s.rng() * Math.PI * 2,
+      attachElev: (s.rng() - 0.5) * 0.8
+    };
+    s.loot3D.push(item);
+    return item;
+  }, []);
+
   // Spawn Loot in 3D
   const spawnCycleLoot = useCallback(() => {
     const s = stateRef.current;
@@ -554,18 +620,20 @@ export default function App() {
       }
     }
     s.loot3D = s.loot3D.filter(i => i.isAttached);
+    s.pendingLoot = [];
+    s.washedIn = 0;
 
-    const mods = s.mods;
     const rng = s.rng;
 
-    const baseCount = Math.floor(4 + rng() * 3 + s.waveIndex * 0.8) + mods.lootCount;
+    const baseCount = Math.floor(4 + rng() * 3 + s.waveIndex * 0.8) + s.mods.lootCount;
     const count = Math.max(3, Math.min(10, baseCount));
 
     const types = [0, 1, 2, 3, 4, 6]; // Ammonite, Glass, Doubloon, Driftwood, Clam, Bottle
+    const { early, lateAt } = planWaveLoot(count);
 
     // The wrack lands on the sand the tide can actually leave it on: see the WRACK_NEAR_X
     // and WRACK_FAR_X notes above for why the band is where it is.
-    for (let i = 0; i < count; i++) {
+    for (let i = 0; i < early; i++) {
       const typeIndex = types[Math.floor(rng() * types.length)];
 
       // Spread the pieces across the sand instead of marching them out to sea. The
@@ -573,56 +641,28 @@ export default function App() {
       // walking up the shore, and it only reads if every piece is on ground you can
       // stand on. The last piece is clamped, so a wide roll cannot float it off the
       // beach and back under the swell.
-      const spread = i / Math.max(1, count - 1);
+      const spread = i / Math.max(1, early - 1);
       const spawnX = Math.min(
         WRACK_FAR_X,
         WRACK_NEAR_X + (WRACK_FAR_X - WRACK_NEAR_X) * spread + (rng() - 0.5) * 1.2
       );
       const spawnZ = (rng() - 0.5) * 11;
-      const groundY = groundHeightAt(spawnX, spawnZ) + 0.3;
+      placeLoot(typeIndex, spawnX, spawnZ);
+    }
 
-      // The sparkle marker rides the pieces that carry the most risk, so it is read
-      // off the piece's place on the shore rather than its index in the loop.
-      const shoreFrac = (spawnX - WRACK_NEAR_X) / (WRACK_FAR_X - WRACK_NEAR_X);
-      const band: 'near' | 'mid' | 'far' =
-        shoreFrac < 0.34 ? 'near' : shoreFrac < 0.67 ? 'mid' : 'far';
-      const mesh = engine3dRef.current.createLootMesh(typeIndex, band);
-
-      mesh.position.set(spawnX, groundY, spawnZ);
-      engine3dRef.current.scene.add(mesh);
-
-      let baseVal = 100;
-      if (typeIndex === 0) baseVal = 320;
-      else if (typeIndex === 1) baseVal = 140;
-      else if (typeIndex === 2) baseVal = 120;
-      else if (typeIndex === 3) baseVal = 80;
-      else if (typeIndex === 4) baseVal = 250;
-      else if (typeIndex === 6) baseVal = 180;
-
-      // Risk pays. The surge arrives from the seaward end and takes the furthest loot
-      // first, so the further up the shore a piece sits the less time there is to
-      // reach it, and the more it is worth for the trouble. The daily tide's own
-      // multiplier is applied here, once, so nothing downstream has to know about it.
-      const risk = Math.max(0, Math.min(1, shoreFrac));
-      const val = Math.round(baseVal * s.currentDiff.multiplier * (1 + risk * 1.2) * mods.lootValue);
-
-      s.loot3D.push({
-        id: Date.now() + i + rng(),
-        mesh,
-        type: typeIndex,
-        band,
-        baseVal,
-        val,
-        x: spawnX,
-        y: groundY,
-        z: spawnZ,
-        origX: spawnX,
-        isAttached: false,
-        attachAngle: rng() * Math.PI * 2,
-        attachElev: (rng() - 0.5) * 0.8
+    // The rest is still out on the water. It comes in with the draw, which is the one
+    // stretch of the cycle where the water is already moving and there is still
+    // something worth one more grab, so the beach can no longer be cleared and banked
+    // before the surge has even been called.
+    for (const at of lateAt) {
+      s.pendingLoot.push({
+        type: types[Math.floor(rng() * types.length)],
+        x: WRACK_FAR_X - rng() * 3.2,
+        z: (rng() - 0.5) * 11,
+        at
       });
     }
-  }, []);
+  }, [placeLoot]);
 
   // Cycle State Transitions
   const enterLowTide = useCallback(() => {
@@ -849,6 +889,7 @@ export default function App() {
     s.isMoving = false;
     s.moveDir = 0;
     s.attached3D = [];
+    s.pendingLoot = [];
     s.digging = false;
     s.digTimer = 0;
     s.isBurrowed = false;
@@ -1337,6 +1378,34 @@ export default function App() {
         if (s.cyclePhase === 'LOW_TIDE') {
           if (s.phaseTimer >= s.phaseDuration) enterWarning();
         } else if (s.cyclePhase === 'WARNING') {
+          // The draw brings wrack in. Anything scheduled for this point in the warning
+          // lands now, so the beach is never fully cleared before the water arrives.
+          // It is read off the phase clock rather than a timer, so a pause holds the
+          // rest of the wave out on the water instead of dropping it behind a blurred
+          // screen.
+          const progress = s.phaseTimer / Math.max(0.001, s.phaseDuration);
+          while (s.pendingLoot.length > 0 && s.pendingLoot[0].at <= progress) {
+            const drop = s.pendingLoot.shift();
+            if (!drop) break;
+            const item = placeLoot(drop.type, drop.x, drop.z);
+            if (!item) continue;
+            playSparkle();
+            // Out over the surf, stepping down the screen per drop, so three arrivals
+            // in one draw stay readable instead of stacking on the bank number.
+            const slot = s.washedIn++ % 3;
+            setPopups(prev => [
+              ...prev.slice(-5),
+              {
+                id: Date.now() + Math.random(),
+                text: `WASHED IN +${item.val}`,
+                x: 70 + slot * 5,
+                y: 44 + slot * 7,
+                alpha: 0.9,
+                isGold: true,
+                size: 'small'
+              }
+            ]);
+          }
           if (s.phaseTimer >= s.phaseDuration) enterSweep();
         } else if (s.cyclePhase === 'WAVE_SWEEP') {
           s.waveX -= s.waveSpeed * dt;
@@ -1529,7 +1598,7 @@ export default function App() {
 
     animId = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(animId);
-  }, [enterWarning, enterSweep, enterRetreat, finishCycle, endRun]);
+  }, [enterWarning, enterSweep, enterRetreat, finishCycle, endRun, placeLoot]);
 
   // The score card exists only inside this browser, so one run is invisible to everyone
   // else. This puts it where a friend or a judge can see it. It fails silently on purpose:
