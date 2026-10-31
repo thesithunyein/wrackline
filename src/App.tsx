@@ -8,6 +8,8 @@ import {
   stopRumble,
   playCrash,
   playWave,
+  hushSea,
+  wakeSea,
   playSparkle,
   playTremolo,
   playDeath,
@@ -782,6 +784,7 @@ export default function App() {
     s.cyclePhase = 'LOW_TIDE';
     s.phaseTimer = 0;
     setIsWaveWarning(false);
+    wakeSea();
 
     // The window closes all season. The old 0.65 floor was reached at wave seven, so
     // every wave after it played identically; the floor now sits out past the last
@@ -857,6 +860,7 @@ export default function App() {
     s.heartLostThisWave = false;
     setIsWaveWarning(false);
     stopRumble();
+    hushSea();
     playWave();
 
     if (engine3dRef.current) {
@@ -877,6 +881,7 @@ export default function App() {
     s.gameState = cause === 'SURVIVED' ? 'WIN' : 'DEAD';
     s.deathTime = Date.now();
     stopRumble();
+    wakeSea();
     setEndCause(cause);
     setAppState(cause === 'SURVIVED' ? 'WIN' : 'DEAD');
     if (cause === 'SURVIVED') {

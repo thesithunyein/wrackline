@@ -1,16 +1,20 @@
-// Game audio for WRACKLINE. Everything but the breaker is synthesised in the Web Audio
-// graph; the breaker itself is one generated swell (public/audio/wave.mp3, declared in the
-// README), fetched once at the first input and decoded into memory.
+// Game audio for WRACKLINE. Two generated samples do the water - the ambient sea bed and the
+// breaker's swell (public/audio/, declared in the README) - fetched once at the first input
+// and decoded into memory. Everything else is synthesised in the Web Audio graph.
 
 let audioCtx: AudioContext | null = null;
 let rumbleOsc: OscillatorNode | null = null;
 let rumbleGain: GainNode | null = null;
 let rumbleFilter: BiquadFilterNode | null = null;
 
-// Ambient ocean surf wash nodes
+// The sea bed. One loop, crossfaded into itself at load so the seam is not audible; the
+// synthesised wash below is only the fallback when the file does not arrive.
 let ambientNoise: AudioBufferSourceNode | null = null;
+let ambientSource: AudioBufferSourceNode | null = null;
 let ambientGain: GainNode | null = null;
-let ambientFilter: BiquadFilterNode | null = null;
+let ambientLevel = 0.55;
+let ambientLoading = false;
+let seaHushed = false;
 
 // The generated breaker, and the voice it is currently playing through.
 let waveSample: AudioBuffer | null = null;
@@ -18,6 +22,9 @@ let waveLoading = false;
 let waveSource: AudioBufferSourceNode | null = null;
 let waveGain: GainNode | null = null;
 
+const AMBIENT_URL = '/audio/wavebg.mp3';
+const AMBIENT_SEAM = 1.5;
+const SYNTH_AMBIENT_LEVEL = 0.04;
 const WAVE_URL = '/audio/wave.mp3';
 // The sample peaks at -7.8 dBFS and sits around -30 dB mean, so it needs a lift to hold
 // its own against the synthesised effects around it without touching the ceiling.
@@ -40,12 +47,18 @@ export function initAudio() {
         audioCtx.resume();
       }
       audioStarted = true;
-      startAmbientOcean();
+      startAmbient();
       loadWaveSample();
     }
   } catch {
     // Audio restricted or not supported
   }
+}
+
+function fetchAudio(ctx: AudioContext, url: string): Promise<AudioBuffer> {
+  return fetch(url)
+    .then(res => (res.ok ? res.arrayBuffer() : Promise.reject(new Error(String(res.status)))))
+    .then(buffer => ctx.decodeAudioData(buffer));
 }
 
 // Fetched and decoded behind the first input, so the first breaker already has it. If it
@@ -55,9 +68,7 @@ function loadWaveSample() {
   if (!audioCtx || waveSample || waveLoading) return;
   const ctx = audioCtx;
   waveLoading = true;
-  fetch(WAVE_URL)
-    .then(res => (res.ok ? res.arrayBuffer() : Promise.reject(new Error(String(res.status)))))
-    .then(buffer => ctx.decodeAudioData(buffer))
+  fetchAudio(ctx, WAVE_URL)
     .then(decoded => {
       waveSample = decoded;
     })
@@ -66,11 +77,86 @@ function loadWaveSample() {
     });
 }
 
+function startAmbient() {
+  if (!audioCtx || ambientSource || ambientNoise || ambientLoading) return;
+  const ctx = audioCtx;
+  ambientLoading = true;
+  fetchAudio(ctx, AMBIENT_URL)
+    .then(buffer => startAmbientLoop(ctx, makeSeamless(ctx, buffer, AMBIENT_SEAM)))
+    .catch(() => startAmbientOcean());
+}
+
+// Crossfade the tail into the head and return a shorter buffer whose end meets its start,
+// so an 11-second sea can loop for a whole run without a drop-out every time it wraps.
+function makeSeamless(ctx: AudioContext, buffer: AudioBuffer, seconds: number): AudioBuffer {
+  const seam = Math.min(Math.floor(seconds * buffer.sampleRate), Math.floor(buffer.length / 3));
+  const length = buffer.length - seam;
+  const out = ctx.createBuffer(buffer.numberOfChannels, length, buffer.sampleRate);
+  for (let ch = 0; ch < buffer.numberOfChannels; ch++) {
+    const src = buffer.getChannelData(ch);
+    const dst = out.getChannelData(ch);
+    dst.set(src.subarray(0, length));
+    for (let i = 0; i < seam; i++) {
+      const phase = (i / seam) * Math.PI * 0.5;
+      dst[i] = src[i] * Math.sin(phase) + src[length + i] * Math.cos(phase);
+    }
+  }
+  return out;
+}
+
+function ensureAmbientGain(): GainNode | null {
+  if (!audioCtx) return null;
+  if (!ambientGain) {
+    ambientGain = audioCtx.createGain();
+    ambientGain.gain.value = 0.0001;
+    ambientGain.connect(audioCtx.destination);
+  }
+  return ambientGain;
+}
+
+function ambientTarget(): number {
+  return isMuted || seaHushed ? 0.0001 : ambientLevel;
+}
+
+function fadeAmbient(seconds: number) {
+  const gain = ensureAmbientGain();
+  if (!gain || !audioCtx) return;
+  const t = audioCtx.currentTime;
+  gain.gain.cancelScheduledValues(t);
+  gain.gain.setValueAtTime(Math.max(0.0001, gain.gain.value), t);
+  gain.gain.exponentialRampToValueAtTime(ambientTarget(), t + seconds);
+}
+
+// Called when the breaker lands: the sea bed drops away so the wave owns the moment.
+export function hushSea() {
+  seaHushed = true;
+  fadeAmbient(0.35);
+}
+
+// Called when the shore is open again, and when a run ends, so the sea is always there.
+export function wakeSea() {
+  seaHushed = false;
+  fadeAmbient(1.1);
+}
+
+function startAmbientLoop(ctx: AudioContext, buffer: AudioBuffer) {
+  const gain = ensureAmbientGain();
+  if (!gain) return;
+  const source = ctx.createBufferSource();
+  source.buffer = buffer;
+  source.loop = true;
+  source.connect(gain);
+  const t = ctx.currentTime;
+  gain.gain.cancelScheduledValues(t);
+  gain.gain.setValueAtTime(0.0001, t);
+  gain.gain.exponentialRampToValueAtTime(ambientTarget(), t + 1.4);
+  source.start(t);
+  ambientSource = source;
+}
+
 export function toggleMute(): boolean {
   isMuted = !isMuted;
-  if (ambientGain && audioCtx) {
-    ambientGain.gain.setValueAtTime(isMuted ? 0 : 0.04, audioCtx.currentTime);
-  }
+  fadeAmbient(0.12);
   // The breaker runs for four seconds, so muting has to reach a sample already in flight.
   if (isMuted) stopWave(0.08);
   return isMuted;
@@ -80,14 +166,14 @@ export function getIsMuted(): boolean {
   return isMuted;
 }
 
-// Gentle continuous procedural ocean surf breeze in background (soft, atmospheric)
+// Fallback sea bed: pinkish noise under a slow lowpass, used only if the sample fails.
 function startAmbientOcean() {
   if (!audioCtx || ambientNoise) return;
   try {
-    const bufferSize = audioCtx.sampleRate * 4;
-    const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+    const ctx = audioCtx;
+    const bufferSize = ctx.sampleRate * 4;
+    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
     const data = buffer.getChannelData(0);
-    // Pinkish noise for natural sea breeze
     let b0 = 0, b1 = 0, b2 = 0;
     for (let i = 0; i < bufferSize; i++) {
       const white = Math.random() * 2 - 1;
@@ -97,29 +183,29 @@ function startAmbientOcean() {
       data[i] = (b0 + b1 + b2) * 0.2;
     }
 
-    ambientNoise = audioCtx.createBufferSource();
+    ambientNoise = ctx.createBufferSource();
     ambientNoise.buffer = buffer;
     ambientNoise.loop = true;
 
-    ambientFilter = audioCtx.createBiquadFilter();
-    ambientFilter.type = 'lowpass';
-    ambientFilter.frequency.setValueAtTime(320, audioCtx.currentTime);
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(320, ctx.currentTime);
 
     // LFO to simulate gentle sea swells breathing
-    const lfo = audioCtx.createOscillator();
-    lfo.frequency.setValueAtTime(0.12, audioCtx.currentTime);
-    const lfoGain = audioCtx.createGain();
-    lfoGain.gain.setValueAtTime(120, audioCtx.currentTime);
-    lfo.connect(ambientFilter.frequency);
+    const lfo = ctx.createOscillator();
+    lfo.frequency.setValueAtTime(0.12, ctx.currentTime);
+    const lfoGain = ctx.createGain();
+    lfoGain.gain.setValueAtTime(120, ctx.currentTime);
+    lfo.connect(filter.frequency);
     lfo.start();
 
-    ambientGain = audioCtx.createGain();
-    ambientGain.gain.setValueAtTime(isMuted ? 0 : 0.035, audioCtx.currentTime);
+    const gain = ensureAmbientGain();
+    if (!gain) return;
+    ambientLevel = SYNTH_AMBIENT_LEVEL;
+    gain.gain.setValueAtTime(ambientTarget(), ctx.currentTime);
 
-    ambientNoise.connect(ambientFilter);
-    ambientFilter.connect(ambientGain);
-    ambientGain.connect(audioCtx.destination);
-
+    ambientNoise.connect(filter);
+    filter.connect(gain);
     ambientNoise.start();
   } catch {}
 }

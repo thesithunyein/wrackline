@@ -21,7 +21,7 @@
 
   <p>
     <img alt="One serverless function" src="https://img.shields.io/badge/BACKEND-one_serverless_function-E25B45?style=for-the-badge&labelColor=17181C">
-    <img alt="Procedural art, synthesised audio with one sampled breaker" src="https://img.shields.io/badge/ART_procedural-AUDIO_one_sample-767E88?style=for-the-badge&labelColor=17181C">
+    <img alt="Procedural art, AI-generated sea and breaker samples" src="https://img.shields.io/badge/ART_procedural-AUDIO_two_generated_samples-767E88?style=for-the-badge&labelColor=17181C">
     <a href="CONTRIBUTING.md"><img alt="PRs welcome" src="https://img.shields.io/badge/PRs-welcome-1A85B6?style=for-the-badge&labelColor=17181C"></a>
   </p>
 </div>
@@ -36,8 +36,8 @@
 | 2 | **Team name** | **Solo Canvas** — a one-person team |
 | 3 | **Main contact** | Team leader **Sithu Nyein** — [sithunyein.mailto@gmail.com](mailto:sithunyein.mailto@gmail.com) · Telegram [@thesithunyein](https://t.me/thesithunyein) |
 | 4 | **Short description** | A seaside arcade game about greed and timing. You are a hermit crab working a storm beach: hold your nerve through the low tide, pull the wrack into your shell, and get off the sand before the breaker lands on you. Thirteen waves, four shell colours, a daily shore. |
-| 16 | **Repository access** | Public: https://github.com/thesithunyein/wrackline. Submission tag **`v1.1.1`** (`git rev-parse v1.1.1` for the exact commit). |
-| 17 | **Build version** | **1.1.1** — tag `v1.1.1`, deployed to production at https://wrackline.sithunyein.com on 2026-10-31. |
+| 16 | **Repository access** | Public: https://github.com/thesithunyein/wrackline. Submission tag **`v1.1.2`** (`git rev-parse v1.1.2` for the exact commit). |
+| 17 | **Build version** | **1.1.2** — tag `v1.1.2`, deployed to production at https://wrackline.sithunyein.com on 2026-10-31. |
 
 ### 5. How to open and play
 
@@ -133,8 +133,8 @@ procedural audio graph and the share-card painter are written in this repository
 ### 11. Asset credit list
 
 Every asset the submission contains or loads, and where the right to use it comes from. Nothing is
-copied from another game, and no stock art, models, textures or samples are used; the one audio file
-is generated audio made for this entry, not sampled from anything.
+copied from another game, and no stock art, models, textures or samples are used; the two audio
+files are generated audio made for this entry, not sampled from anything.
 
 | Asset | What it is | Author / origin | Licence or permission | Shipped as |
 |---|---|---|---|---|
@@ -145,7 +145,8 @@ is generated audio made for this entry, not sampled from anything.
 | **`docs/logo.svg`** | the mark exported on its own | export of the same code output | original work | repository |
 | **`public/og.png`** | title-screen social card | screenshot of this game's own title screen | original work | repository |
 | **Share card** | the 1080x1350 run card | painted at runtime by `src/shareCard.ts` | original work | generated per run |
-| **Sound effects and surf ambience** | haul, bank, heart, warning rumble, impact, UI cues | synthesised at runtime by `src/audio.ts` | original work; no bought libraries | no files |
+| **Sound effects** | haul, bank, heart, warning rumble, impact, UI cues | synthesised at runtime by `src/audio.ts` | original work; no bought libraries | no files |
+| **`public/audio/wavebg.mp3`** | the sea bed under the whole game, 11.2 s loop, 260 KB | **AI-generated for this entry**; declared in §15 | generated, not sampled from any existing recording; no third-party rights involved | repository, served from the game's own `/audio/`, crossfaded into a seamless loop at load |
 | **`public/audio/wave.mp3`** | the breaker's swell and crash, 4.2 s, 95 KB | **AI-generated for this entry**; declared in §15 | generated, not sampled from any existing recording; no third-party rights involved | repository, served from the game's own `/audio/` |
 | **Righteous** | display typeface | Astigmatic, via Google Fonts | SIL Open Font License 1.1 | fetched at runtime, not bundled |
 | **Space Grotesk** | UI typeface | Florian Karsten, via Google Fonts | SIL Open Font License 1.1 | fetched at runtime, not bundled |
@@ -163,8 +164,8 @@ unaffected apart from the Burmese glyph style.
 
 **Not in the submission:** no third-party art, 3D models, textures, HDRI maps, music, voice or
 sound files; no trademarks, stock photography or scraped data; no personal or confidential
-information about any person. The only audio file in the repository is the breaker above: it was
-generated for this entry, and it is the one audible exception to the synthesised graph.
+information about any person. The only audio files in the repository are the two generated ones
+above; they are the only non-synthesised sounds in the game.
 
 ### 12. Special testing instructions
 
@@ -205,10 +206,10 @@ npm run build && npm run preview # production bundle
 | **`/api/leaderboard`** on Vercel | world boards and score submission | the on-device board, labelled as such |
 | **Upstash / Vercel KV (Redis REST)** | durable storage behind that endpoint | the endpoint answers `503` with `storage: "unavailable"` and the client keeps the local board |
 
-A run itself makes **no network calls beyond one own-host fetch**: the breaker sample
-(`/audio/wave.mp3`, 95 KB) is pulled once, at the first key press or tap, and decoded in memory.
-Everything else — the geometry, the other sounds, the share card — is generated locally, and the
-score is posted once at the end.
+A run itself makes **no network calls beyond two own-host fetches**: the sea bed
+(`/audio/wavebg.mp3`, 260 KB) and the breaker (`/audio/wave.mp3`, 95 KB) are pulled once, at the
+first key press or tap, and decoded in memory. Everything else — the geometry, the other sounds,
+the share card — is generated locally, and the score is posted once at the end.
 
 ### 15. AI use declaration
 
@@ -216,12 +217,15 @@ score is posted once at the end.
 |---|---|---|---|
 | **Qoder** (agentic coding IDE, Claude-family model) | implementation assistance: scene code, game state, UI, i18n, settings sheet, tests, build config, this README | most of `src/`, plus `api/leaderboard.ts`, `server/leaderboardStore.ts`, `tests/`, `index.html`, `vite.config.ts`, `README.md` | every change read and approved line by line before commit; `tsc --noEmit` and the 44 `node:test` cases run on each change; the production build played in Chrome at 1280x800 and 390x844 before it shipped; the model's mistakes were caught and fixed (the settings icon was first drawn as a sun, the Burmese face first hijacked the Latin wordmark), and every tuning constant is the developer's, set from measured playtests |
 | **Qoder** | throwaway verification scripts | `pt/` — puppeteer-core, font-inspection and screenshot scripts kept outside the repository | used only to measure this build; not part of the submission |
-| **An AI audio generator** (provider and version not recorded at generation time) | the breaker sample, `public/audio/wave.mp3` | the swell and crash of the wave, generated rather than recorded | the file was auditioned in the built game against the rest of the mix, trimmed by playback envelope in `src/audio.ts`, and layered over a synthesised sub-bass thump; it is the only AI-generated asset in the submission |
+| **An AI audio generator** (provider and version not recorded at generation time) | the sea bed and the breaker, `public/audio/wavebg.mp3` and `public/audio/wave.mp3` | the ambient wash under play and the swell and crash of the wave, generated rather than recorded | both files were auditioned in the built game against the rest of the mix; the sea bed is crossfaded into a seamless loop at load and hushed under each breaker, and the breaker is trimmed by playback envelope in `src/audio.ts` and layered over a synthesised sub-bass thump; they are the only AI-generated assets in the submission |
 
-- **One AI-generated audio asset.** The breaker swell (`public/audio/wave.mp3`, §11) was generated
-  with an AI audio tool rather than recorded or sampled. It is declared here, credited in §11 and
-  named in §18. Everything else audible is a Web Audio graph built in `src/audio.ts`; if the file
-  fails to load, the game falls back to the synthesised crash it used before and plays on.
+- **Two AI-generated audio assets.** The sea bed (`public/audio/wavebg.mp3`) and the breaker swell
+  (`public/audio/wave.mp3`, §11) were generated with an AI audio tool rather than recorded or
+  sampled. The sea bed plays under the whole game, is crossfaded into itself at load so the loop
+  has no seam, and is hushed when the breaker lands so the wave owns the moment; the breaker is the
+  one sound the surge itself makes. Both are declared here, credited in §11 and named in §18.
+  Everything else audible is a Web Audio graph built in `src/audio.ts`; if either file fails to
+  load, the game falls back to the synthesised sea and crash it used before.
 - **No AI-generated art, voice, 3D models or textures.** Everything visible is procedural code
   (Three.js geometry, canvas painting). The only raster in the submission, `public/og.png`, is a
   screenshot of the game's own title screen.
@@ -242,22 +246,22 @@ Team **Solo Canvas** confirms:
    between then and 2026-10-31. No code, asset or commit was imported from an earlier project.
 2. **Not copied from another game.** The mechanics (a haul-you-can-lose loop, a wave clock, hearts,
    missions, a daily shore), the tuning, the geometry, the UI and the Web Audio graph were written
-   from scratch for this entry. The one audio sample is AI-generated, made for this entry and
-   declared in §15; it copies no existing recording. No code, art, level or data was taken from
+   from scratch for this entry. The two audio samples are AI-generated, made for this entry and
+   declared in §15; they copy no existing recording. No code, art, level or data was taken from
    another game.
 3. **Not commercially available and not on any public market.** The game has never been sold,
    licensed or listed on a store or marketplace. https://wrackline.sithunyein.com is a free public
    build with no ads, purchases, subscriptions or accounts, hosted so judges and players can open
    it; there is no commercial release.
 4. **Right to use all assets.** Every asset is original work, MIT, Apache-2.0 or SIL OFL 1.1, as
-   itemised in §11 — with the breaker sample, which was AI-generated for this entry and is declared
-   in §15 — and with one disclosed licence exception: the Aka08 Burmese face carries no licence
-   grant. It is fetched at runtime from its author's public CDN, is not redistributed in the
+   itemised in §11 — with the sea bed and breaker samples, which were AI-generated for this entry
+   and are declared in §15 — and with one disclosed licence exception: the Aka08 Burmese face
+   carries no licence grant. It is fetched at runtime from its author's public CDN, is not redistributed in the
    repository or in any build, is used only for the Burmese interface, and the UI falls back to Noto
    Sans Myanmar (SIL OFL 1.1) without it. Removing it is a one-line change.
 5. **No infringement of third-party rights.** The name WRACKLINE, the mark, the wordmark, the
    creature and the shore are original to this entry. No third-party trademarks, stock images,
-   audio samples or scraped data are used; the breaker sample is generated for this entry, not
+   audio samples or scraped data are used; both water samples are generated for this entry, not
    sampled from anyone's recording.
 6. **Proof of originality available on request.** The development history, the file tree and this
    document are in the public repository; the deployed build is the tagged commit.
@@ -265,7 +269,7 @@ Team **Solo Canvas** confirms:
    review behind them.
 8. **The repository and its history are accurate.** One author (two spellings of the same name and
    email), a linear history with no imported, squashed or generated commits, and no secrets
-   committed. The deployed production build is tag `v1.1.1`.
+   committed. The deployed production build is tag `v1.1.2`.
 
 Signed for the team: **Sithu Nyein**, Solo Canvas — 2026-10-31.
 
@@ -520,7 +524,7 @@ flowchart TD
   Pointer["Mouse and touch<br/>hold to haul"] --> App
   App["App.tsx<br/>game state, HUD, input, frame loop"] -->|"update state, drawdown"| Engine["game3d.ts<br/>terrain, ocean, breaker, scenery, creature, particles"]
   Engine -->|"draw"| Canvas["WebGL canvas"]
-  App -->|"crunch, thock, breaker, rumble"| Audio["audio.ts<br/>Web Audio graph plus one sampled breaker"]
+  App -->|"crunch, thock, breaker, rumble"| Audio["audio.ts<br/>Web Audio graph, sampled sea and breaker"]
   Audio --> Speakers["Sound"]
   App -->|"best score, name, daily progress"| Store["localStorage"]
   App -->|"rounded run"| Endpoint["api/leaderboard.ts<br/>Vercel function"]
@@ -608,13 +612,15 @@ without colliding with another project's keys. The board's own keys are namespac
 - **React 19 + TypeScript + Vite 8**, with Tailwind CSS v4 for the HUD and menus.
 - **Three.js** renders the whole world: a faceted dune mesh and wet sand strip, an animated ocean,
   the breaker, and every prop. Flat shading with non-indexed geometry keeps the low-poly facets.
-- **Web Audio** builds almost all the sound at runtime, from the gasp of the warning to the crunch
-  of the wrack line. The breaker itself is one 4.2-second sample, generated for this entry (§11,
-  §15), fetched from the game's own `/audio/` at the first key press and decoded in memory. If it
-  fails to arrive, the synthesised crash plays instead and the game is unchanged.
-- **No art files.** Geometry, the logo and the UI icons are all generated, so the two binaries in
-  the repository are the social card and that one audio sample.
-- **Fonts and the breaker sample are the only things fetched at runtime**: the sample from this
+- **Web Audio** builds the cues at runtime, from the gasp of the warning to the crunch of the wrack
+  line. The water itself is two generated samples (§11, §15): an 11-second sea bed, crossfaded into
+  a seamless loop at load and hushed whenever the breaker lands, and the breaker's own 4.2-second
+  swell. Both are fetched from the game's own `/audio/` at the first key press and decoded in
+  memory; if either fails to arrive, the synthesised sea and crash stand in and the game is
+  unchanged.
+- **No art files.** Geometry, the logo and the UI icons are all generated, so the three binaries in
+  the repository are the social card and the two water samples.
+- **Fonts and the two water samples are the only things fetched at runtime**: the samples from this
   deployment, the fonts from Google Fonts (Righteous and Space Grotesk for the Latin interface, Noto
   Sans Myanmar as the Burmese fallback), and Aka08 for the Burmese interface itself, which comes
   from its author's CDN because the file is all-rights-reserved.
@@ -631,7 +637,7 @@ src/game/retention.ts  daily tide, missions, streak, shore points, shells
 src/game/leaderboardCore.ts  the run rules every layer agrees on
 src/game/leaderboard.ts      the client: local board, online board, submissions
 src/game/loot.ts    how a wave's wrack splits between the sand and the draw
-src/audio.ts        Web Audio graph, plus the sampled breaker loaded at first input
+src/audio.ts        Web Audio graph, the sampled sea bed and breaker, loaded at first input
 src/Logo.tsx        the badge mark and wordmark
 src/logoMark.ts     the mark's shapes, shared by the logo and the share card
 src/shareCard.ts    the 1080x1350 score card, drawn on a canvas
@@ -641,7 +647,8 @@ server/leaderboardStore.ts  file and Redis REST stores, one row per player
 tests/              node:test suites for the board, retention and loot rules
 docs/logo.svg       the mark on its own, for READMEs and press
 public/og.png       social card
-public/audio/wave.mp3  the breaker sample (AI-generated, §11 and §15)
+public/audio/wavebg.mp3  the sea bed, looped under play (AI-generated, §11 and §15)
+public/audio/wave.mp3    the breaker sample (AI-generated, §11 and §15)
 ```
 
 ## Contributing
@@ -677,10 +684,10 @@ Telegram [@thesithunyein](https://t.me/thesithunyein)).
 
 **Art and audio:** the art is entirely original and entirely procedural. The terrain, ocean,
 breaker, props, creature, shell portraits, logo, UI icons and share card are drawn in code with
-Three.js and Canvas, and the sound bed, cues and sub-bass impacts are synthesised with Web Audio.
-The one exception is the breaker swell itself, one AI-generated sample (`public/audio/wave.mp3`)
-generated for this entry and declared in §11 and §15. No third-party art, models, textures or
-existing recordings are used.
+Three.js and Canvas, and the cues, warning rumble and sub-bass impacts are synthesised with Web
+Audio. The exceptions are the two water sounds — the sea bed and the breaker, `wavebg.mp3` and
+`wave.mp3` — AI-generated for this entry and declared in §11 and §15. No third-party art, models,
+textures or existing recordings are used.
 
 **Fonts** are the only third-party assets in the running game:
 
