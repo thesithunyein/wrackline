@@ -20,7 +20,6 @@ const DRIFT = '#BFAE93';
 const STONE = '#B8A98F';
 const RUST = '#E25B45';
 const SLATE = '#767E88';
-const QUIET = '#6B6E75';
 
 const GAME_FONT = "'Righteous', 'Space Grotesk', system-ui, sans-serif";
 const UI_FONT = "'Space Grotesk', system-ui, sans-serif";
@@ -34,7 +33,6 @@ export interface ShareCardData {
   tide: string;
   survived: boolean;
   isNewBest: boolean;
-  url: string;
 }
 
 // The name is the only thing a player types, so it is the only thing that can arrive
@@ -337,14 +335,6 @@ function drawCard(ctx: CanvasRenderingContext2D, data: ShareCardData, badge: HTM
     CARD_WIDTH / 2,
     1238,
     { size: 32, min: 20, family: UI_FONT, weight: '900', spacingPx: 5, color: DEEP },
-    900
-  );
-  centered(
-    ctx,
-    data.url.replace(/^https?:\/\//, '').replace(/\/$/, '').toUpperCase(),
-    CARD_WIDTH / 2,
-    1296,
-    { size: 28, min: 18, family: UI_FONT, weight: '900', spacingPx: 5, color: QUIET },
     900
   );
 

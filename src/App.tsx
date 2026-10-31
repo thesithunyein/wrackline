@@ -1752,8 +1752,7 @@ export default function App() {
         season: SEASON_WAVES,
         tide: selectedDiff.name,
         survived: endCause === 'SURVIVED',
-        isNewBest,
-        url: 'https://wrackline.vercel.app'
+        isNewBest
       };
 
       try {
