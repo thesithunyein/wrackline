@@ -1675,42 +1675,71 @@ export default function App() {
           z-50, above the title card's overlay but below the end screen and the
           sheets: the guide, sound, fullscreen and board buttons have to work from
           the menu, which is the screen a first-time player is looking at. */}
-      <div className="absolute top-[max(1rem,env(safe-area-inset-top))] right-[max(1rem,env(safe-area-inset-right))] md:top-5 md:right-5 z-50 flex items-center gap-2 md:gap-3">
-        <button
-          onClick={() => setShowGuide(prev => !prev)}
-          title="Guide & Controls (H)"
-          aria-label="How to play"
-          className="w-10 h-10 md:w-11 md:h-11 rounded-xl bg-[#FDFBF7] hover:bg-[#EAD7B0] border-2 border-[#17181C] shadow-[0_3px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] text-[#17181C] font-bold text-base flex items-center justify-center transition-all cursor-pointer"
-        >
-          ?
-        </button>
+      <div className="absolute top-[max(1rem,env(safe-area-inset-top))] right-[max(1rem,env(safe-area-inset-right))] md:top-5 md:right-5 z-50 flex flex-col items-end gap-2 md:flex-row-reverse md:items-start md:gap-3">
+        <div className="flex items-center gap-2 md:gap-3">
+          <button
+            onClick={() => setShowGuide(prev => !prev)}
+            title="Guide & Controls (H)"
+            aria-label="How to play"
+            className="w-10 h-10 md:w-11 md:h-11 rounded-xl bg-[#FDFBF7] hover:bg-[#EAD7B0] border-2 border-[#17181C] shadow-[0_3px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] text-[#17181C] font-bold text-base flex items-center justify-center transition-all cursor-pointer"
+          >
+            ?
+          </button>
 
-        <button
-          onClick={() => handleToggleMute()}
-          title="Toggle Audio (M)"
-          aria-label={muted ? 'Turn sound on' : 'Turn sound off'}
-          className="w-10 h-10 md:w-11 md:h-11 rounded-xl bg-[#FDFBF7] hover:bg-[#EAD7B0] border-2 border-[#17181C] shadow-[0_3px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] text-[#17181C] text-sm flex items-center justify-center transition-all cursor-pointer"
-        >
-          <IconSound muted={muted} />
-        </button>
+          <button
+            onClick={() => handleToggleMute()}
+            title="Toggle Audio (M)"
+            aria-label={muted ? 'Turn sound on' : 'Turn sound off'}
+            className="w-10 h-10 md:w-11 md:h-11 rounded-xl bg-[#FDFBF7] hover:bg-[#EAD7B0] border-2 border-[#17181C] shadow-[0_3px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] text-[#17181C] text-sm flex items-center justify-center transition-all cursor-pointer"
+          >
+            <IconSound muted={muted} />
+          </button>
 
-        <button
-          onClick={toggleFullscreen}
-          title="Toggle Fullscreen (F)"
-          aria-label="Toggle fullscreen"
-          className="w-10 h-10 md:w-11 md:h-11 rounded-xl bg-[#FDFBF7] hover:bg-[#EAD7B0] border-2 border-[#17181C] shadow-[0_3px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] text-[#17181C] text-base flex items-center justify-center transition-all cursor-pointer"
-        >
-          <IconExpand />
-        </button>
+          <button
+            onClick={toggleFullscreen}
+            title="Toggle Fullscreen (F)"
+            aria-label="Toggle fullscreen"
+            className="w-10 h-10 md:w-11 md:h-11 rounded-xl bg-[#FDFBF7] hover:bg-[#EAD7B0] border-2 border-[#17181C] shadow-[0_3px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] text-[#17181C] text-base flex items-center justify-center transition-all cursor-pointer"
+          >
+            <IconExpand />
+          </button>
 
-        <button
-          onClick={() => setBoardOpen(true)}
-          title="Tide boards"
-          aria-label="Open the tide boards"
-          className="w-10 h-10 md:w-11 md:h-11 rounded-xl bg-[#FDFBF7] hover:bg-[#EAD7B0] border-2 border-[#17181C] shadow-[0_3px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] text-[#17181C] flex items-center justify-center transition-all cursor-pointer"
-        >
-          <IconBoard />
-        </button>
+          <button
+            onClick={() => setBoardOpen(true)}
+            title="Tide boards"
+            aria-label="Open the tide boards"
+            className="w-10 h-10 md:w-11 md:h-11 rounded-xl bg-[#FDFBF7] hover:bg-[#EAD7B0] border-2 border-[#17181C] shadow-[0_3px_0_#17181C] active:translate-y-[2px] active:shadow-[0_1px_0_#17181C] text-[#17181C] flex items-center justify-center transition-all cursor-pointer"
+          >
+            <IconBoard />
+          </button>
+        </div>
+
+        {/* Best and wave ride in the same flow as the buttons: on a phone they stack
+            underneath, on a wide screen they sit to the left of the icon row. Two
+            separate absolute offsets used to guess at the button row's width, and
+            the wave card lost that guess as soon as the header grew a fourth button. */}
+        {appState === 'PLAYING' && (
+          <div className="pointer-events-none flex items-center gap-2 md:mt-1 md:gap-3">
+            <div className="bg-[#FDFBF7]/95 border-2 border-[#17181C] rounded-2xl px-3 py-2 md:px-4 md:py-2.5 shadow-[0_4px_0_#17181C] flex flex-col items-end gap-0.5">
+              <span className="text-[10px] font-black text-[#17181C]/60 uppercase tracking-widest">
+                BEST
+              </span>
+              <span className="font-game text-lg min-[385px]:text-xl md:text-2xl font-bold text-[#24698F] leading-none tabular-nums">
+                {bestScore}
+              </span>
+            </div>
+
+            <div className="bg-[#FDFBF7]/95 border-2 border-[#17181C] rounded-2xl px-3 py-2 md:px-3.5 md:py-2.5 shadow-[0_4px_0_#17181C] flex flex-col items-center gap-0.5">
+              <span className="text-[10px] font-black text-[#17181C]/60 uppercase tracking-widest">
+                WAVE
+              </span>
+              <span className="font-game text-lg min-[385px]:text-xl md:text-2xl font-bold text-[#E8A317] leading-none tabular-nums">
+                {Math.min(wavesSurvived + 1, SEASON_WAVES)}
+                <span className="text-[#17181C]/40 text-sm md:text-base">/{SEASON_WAVES}</span>
+              </span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Floating Score Popups */}
@@ -1873,22 +1902,6 @@ export default function App() {
             </button>
           </div>
 
-          {/* Bottom Zone: Instant Guide - Immediately Explains What Game Is For.
-              Four verbs, and nothing else: SCUTTLE, HAUL, BANK, DIG IN. The 01 to 04
-              index and the bracketed key names that used to lead these lines were a
-              keymap inside the game, which is the one place a keymap is not needed,
-              because the controls are already on screen as buttons. Both made four
-              verbs read like a manual. The guide (?) still lists every control, and
-              the first run still names the keys once, when they are worth knowing. */}
-          <div className="shrink-0 w-full max-w-xs md:w-auto md:max-w-none grid grid-cols-2 gap-x-4 gap-y-2.5 md:flex md:flex-wrap md:items-center md:justify-center md:gap-7 bg-[#FDFBF7]/90 backdrop-blur-xs border-2 border-[#17181C] px-5 py-3.5 md:px-6 md:py-3 rounded-2xl shadow-[0_4px_0_#17181C] text-[11px] md:text-xs font-bold text-[#17181C]">
-            <span>SCUTTLE</span>
-            <span className="text-[#17181C]/25 hidden md:inline">|</span>
-            <span>HAUL</span>
-            <span className="text-[#17181C]/25 hidden md:inline">|</span>
-            <span className="col-span-2 md:col-auto">BANK BEFORE THE SURGE</span>
-            <span className="text-[#17181C]/25 hidden md:inline">|</span>
-            <span className="col-span-2 md:col-auto">DIG IN TO RIDE IT OUT</span>
-          </div>
         </div>
       )}
 
@@ -1905,7 +1918,9 @@ export default function App() {
             <span className="text-[10px] font-black text-[#17181C]/60 uppercase tracking-widest">
               SCORE
             </span>
-            <span className="font-game text-4xl md:text-5xl font-bold text-[#17181C] tracking-tight leading-none">
+            {/* Six-figure scores are the normal case, and at 360px the wider type
+                ran into the icon row. The score steps down before the layout has to. */}
+            <span className="font-game text-3xl min-[385px]:text-4xl md:text-5xl font-bold text-[#17181C] tracking-tight leading-none tabular-nums">
               {displayedBanked}
             </span>
             {/* Hearts: the only way to lose. A wave that catches you holding costs
@@ -1924,28 +1939,6 @@ export default function App() {
                   {i < hearts ? '♥' : '♡'}
                 </span>
               ))}
-            </div>
-          </div>
-
-          {/* Low-Poly Best & Wave Pill (Top Center-Right) */}
-          <div className="absolute top-[calc(max(1rem,env(safe-area-inset-top))+3.25rem)] right-[max(1rem,env(safe-area-inset-right))] md:top-6 md:right-48 pointer-events-none flex items-center gap-2 md:gap-3">
-            <div className="bg-[#FDFBF7]/95 border-2 border-[#17181C] rounded-2xl px-3 py-2 md:px-4 md:py-2.5 shadow-[0_4px_0_#17181C] flex flex-col items-end gap-0.5">
-              <span className="text-[10px] font-black text-[#17181C]/60 uppercase tracking-widest">
-                BEST
-              </span>
-              <span className="font-game text-xl md:text-2xl font-bold text-[#24698F] leading-none">
-                {bestScore}
-              </span>
-            </div>
-
-            <div className="bg-[#FDFBF7]/95 border-2 border-[#17181C] rounded-2xl px-3 py-2 md:px-3.5 md:py-2.5 shadow-[0_4px_0_#17181C] flex flex-col items-center gap-0.5">
-              <span className="text-[10px] font-black text-[#17181C]/60 uppercase tracking-widest">
-                WAVE
-              </span>
-              <span className="font-game text-xl md:text-2xl font-bold text-[#E8A317] leading-none">
-                {Math.min(wavesSurvived + 1, SEASON_WAVES)}
-                <span className="text-[#17181C]/40 text-sm md:text-base">/{SEASON_WAVES}</span>
-              </span>
             </div>
           </div>
 
